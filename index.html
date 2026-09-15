@@ -357,7 +357,6 @@
         let currentDuplicateIndex = 0;
         let actualEtiquettesTableName = "ETIQUETTES";
         
-        // Tables de référence en cache pour décoder les IDs en textes
         let refCaches = {
             domaine: [],
             typeStruct: [],
@@ -368,7 +367,6 @@
             requiredAccess: 'full'
         });
 
-        // Fonction utilitaire pour normaliser les données brutes Grist (Table ou Objet de tableaux)
         function normalizeGristRecords(raw) {
             if (Array.isArray(raw)) return raw;
             if (raw && typeof raw === 'object' && Array.isArray(raw.id)) {
@@ -391,7 +389,6 @@
             try {
                 const tables = await grist.docApi.listTables();
                 
-                // Recherche souple des tables correspondantes dans le document
                 const findTable = (keywords) => {
                     return tables.find(t => keywords.some(kw => t.toLowerCase().includes(kw)));
                 };
@@ -417,27 +414,31 @@
             }
         }
 
-        // Cherche le libellé textuel d'un ID dans une table de référence
+        // Fonction ultra-robuste pour extraire le texte d'un enregistrement de référence
         function getRefLabel(records, id) {
-            if (!id) return "";
+            if (id === undefined || id === null || id === "") return "";
             const numId = parseInt(id, 10);
-            if (isNaN(numId)) return id; // si c'est déjà du texte
+            if (isNaN(numId)) return String(id);
 
             const found = records.find(r => r.id === numId);
-            if (!found) return id;
+            if (!found) return `ID: ${id}`;
 
-            // Cherche en priorité une colonne textuelle explicite (nom, libelle, intitule, titre, description)
-            const possibleKeys = ['NOM', 'Nom', 'libelle', 'Libelle', 'intitule', 'Intitule', 'titre', 'Titre', 'description', 'Description'];
-            for (const k of possibleKeys) {
-                if (found[k] !== undefined && found[k] !== null) {
-                    return found[k];
+            // 1. Chercher parmi les noms de champs textuels courants
+            const priorityKeys = ['NOM', 'Nom', 'nom', 'LIBELLE', 'Libelle', 'libelle', 'INTITULE', 'Intitule', 'intitule', 'TITRE', 'Titre', 'titre', 'DESCRIPTION', 'Description', 'description', 'LABEL', 'Label', 'label'];
+            for (const k of priorityKeys) {
+                if (found[k] !== undefined && found[k] !== null && String(found[k]).trim() !== '') {
+                    return String(found[k]);
                 }
             }
-            // Sinon retourne la première propriété textuelle trouvée
+
+            // 2. Sinon, prendre la première propriété textuelle disponible (qui n'est pas l'id)
             for (const [k, v] of Object.entries(found)) {
-                if (k !== 'id' && typeof v === 'string') return v;
+                if (k !== 'id' && v !== null && v !== undefined && String(v).trim() !== '') {
+                    return String(v);
+                }
             }
-            return id;
+
+            return `ID: ${id}`;
         }
 
         function handleDragOver(e) {
@@ -809,7 +810,6 @@
             const ext = item.existing;
             const imp = item.imported;
 
-            // --- FUSION INTELLIGENTE AUTOMATIQUE DES CHAMPS ---
             let mergedEmailSec = ext.EMAILS_SECONDAIRES || "";
             if (imp.EMAIL_PRINCIPAL && imp.EMAIL_PRINCIPAL !== ext.EMAIL_PRINCIPAL && !mergedEmailSec.includes(imp.EMAIL_PRINCIPAL)) {
                 mergedEmailSec = mergedEmailSec ? mergedEmailSec + ", " + imp.EMAIL_PRINCIPAL : imp.EMAIL_PRINCIPAL;
@@ -849,12 +849,10 @@
                 mergedComment = mergedComment ? mergedComment + "\n---\n" + imp.Commentaire_Description : imp.Commentaire_Description;
             }
 
-            // Références (IDs)
             const extTypeStructId = ext.TYPE_DE_STRUCTURE_CONTACT || imp.TYPE_DE_STRUCTURE_CONTACT || "";
             const extDomaineId = ext.DOMAINE_D_ACTIVITES || imp.DOMAINE_D_ACTIVITES || "";
             const extStatutJurId = ext.STATUT_JURIDIQUE || imp.STATUT_JURIDIQUE || "";
 
-            // Génération des listes déroulantes pour les champs de référence
             const createSelectOptions = (records, currentId) => {
                 let html = `<option value="">-- Aucun --</option>`;
                 records.forEach(r => {
