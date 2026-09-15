@@ -17,6 +17,8 @@
             --error-bg: #ffeeec;
             --error-border: #ef4444;
             --success: #10b981;
+            --warning-bg: #fef3c7;
+            --warning-border: #f59e0b;
         }
 
         body {
@@ -29,7 +31,7 @@
         }
 
         .container {
-            max-width: 900px;
+            max-width: 950px;
             margin: 0 auto;
             background: var(--card-bg);
             padding: 24px;
@@ -90,6 +92,13 @@
         .btn:disabled {
             background-color: var(--border);
             cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background-color: #f59e0b;
+        }
+        .btn-secondary:hover {
+            background-color: #d97706;
         }
 
         #mapping-container {
@@ -183,6 +192,42 @@
         #status-msg {
             color: var(--text-muted);
         }
+
+        /* Styles pour le rapport de doublons */
+        #report-section {
+            margin-top: 25px;
+            border-top: 2px solid var(--border);
+            padding-top: 20px;
+        }
+
+        .duplicate-card {
+            background: var(--warning-bg);
+            border: 1px solid var(--warning-border);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            background: white;
+            font-size: 0.85rem;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .comparison-table th, .comparison-table td {
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .comparison-table th {
+            background-color: #f1f5f9;
+            color: var(--text-main);
+        }
     </style>
 </head>
 <body>
@@ -215,23 +260,32 @@
                 <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 12px;">
                     Cochez les listes ci-dessous pour les appliquer automatiquement à tous les contacts importés de ce fichier :
                 </p>
-                <div id="tags-container" class="tags-grid">
-                    <!-- Rempli dynamiquement -->
-                </div>
+                <div id="tags-container" class="tags-grid"></div>
             </div>
 
-            <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <button id="btnImport" class="btn" onclick="executeImport()">Lancer l'intégration</button>
                 <div id="status-container">
                     <span id="status-msg"></span>
                 </div>
             </div>
         </div>
+
+        <!-- Section Rapport et Doublons -->
+        <div id="report-section" class="hidden">
+            <h3 id="report-title">Rapport d'importation</h3>
+            <p id="report-summary" style="font-size: 0.95rem; font-weight: 500;"></p>
+            <div id="duplicate-toggle-container" class="hidden" style="margin-top: 15px;">
+                <button class="btn btn-secondary" onclick="toggleDuplicatesView()">Faire apparaître les doublons (<span id="dup-count">0</span>)</button>
+            </div>
+            <div id="duplicates-container" class="hidden" style="margin-top: 20px;"></div>
+        </div>
     </div>
 
     <script>
         let parsedData = [];
         let csvHeaders = [];
+        let detectedDuplicates = [];
 
         grist.ready({
             requiredAccess: 'full'
@@ -361,7 +415,6 @@
                 container.appendChild(card);
             });
 
-            // Charger les listes de diffusion existantes depuis la table ETIQUETTES via fetchTable
             loadDiffusionTags();
         }
 
@@ -377,12 +430,10 @@
             ];
 
             try {
-                // Récupération des lignes de la table ETIQUETTES
                 const records = await grist.docApi.fetchTable('ETIQUETTES');
                 tagsContainer.innerHTML = '';
 
                 listColumns.forEach(group => {
-                    // Extraire toutes les valeurs uniques non vides pour cette colonne de la table ETIQUETTES
                     const uniqueValues = new Set();
                     records.forEach(row => {
                         const val = row[group.col];
@@ -409,7 +460,6 @@
                             checkbox.type = 'checkbox';
                             checkbox.name = 'diffusion_tag';
                             checkbox.dataset.column = group.col;
-                            // On stocke le nom ou l'ID de l'étiquette selon ce que renvoie Grist
                             checkbox.value = tagName;
 
                             label.appendChild(checkbox);
@@ -423,7 +473,7 @@
                     tagsContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">Aucune liste trouvée dans ETIQUETTES.</span>';
                 }
             } catch (err) {
-                console.error("Impossible de charger la table ETIQUETTES :", err);
+                console.error("Erreur de chargement ETIQUETTES :", err);
                 tagsContainer.innerHTML = '<span style="color: var(--error-border); font-size: 0.85rem;">Erreur de chargement des étiquettes.</span>';
             }
         }
@@ -445,71 +495,111 @@
                 return;
             }
 
-            // Récupérer les listes de diffusion cochées
             const selectedTagsByColumn = {};
             document.querySelectorAll('input[name="diffusion_tag"]:checked').forEach(cb => {
                 const colName = cb.dataset.column;
                 if (!selectedTagsByColumn[colName]) {
                     selectedTagsByColumn[colName] = [];
                 }
-                // Si la valeur est un nombre (ID de référence), on le parse en int, sinon texte
                 const val = isNaN(cb.value) ? cb.value : parseInt(cb.value, 10);
                 selectedTagsByColumn[colName].push(val);
             });
 
             const btn = document.getElementById('btnImport');
             btn.disabled = true;
-            document.getElementById('status-msg').innerText = "Préparation des données...";
+            document.getElementById('status-msg').innerText = "Analyse des doublons et préparation...";
 
-            const multiRefColumns = [
-                "Listes_Diffusion_Intervenants",
-                "Listes_Diffusion_Cinema",
-                "Listes_Diffusion_Direction",
-                "Listes_Diffusion_Houdremont"
-            ];
+            try {
+                // Récupération des contacts existants avant l'import pour comparaison des doublons
+                const existingContacts = await grist.docApi.fetchTable('CONTACTS');
 
-            const columnCorrections = {
-                "Téléphone_Principal": "Telephone_Principal",
-                "Téléphones_Secondaires": "Telephones_Secondaires"
-            };
+                // Indexation des contacts existants pour recherche rapide (par email et nom)
+                const existingEmails = new Set();
+                const existingNames = new Set();
+                existingContacts.forEach(c => {
+                    if (c.EMAIL_PRINCIPAL) existingEmails.add(c.EMAIL_PRINCIPAL.toString().toLowerCase().trim());
+                    if (c.EMAILS_SECONDAIRES) existingEmails.add(c.EMAILS_SECONDAIRES.toString().toLowerCase().trim());
+                    if (c.NOM) existingNames.add(c.NOM.toString().toLowerCase().trim());
+                });
 
-            const recordsToInsert = parsedData.map(row => {
-                const newRecord = {};
-                for (const [origKey, targetKey] of Object.entries(mapping)) {
-                    let val = row[origKey];
-                    const finalKey = columnCorrections[targetKey] || targetKey;
+                const multiRefColumns = [
+                    "Listes_Diffusion_Intervenants",
+                    "Listes_Diffusion_Cinema",
+                    "Listes_Diffusion_Direction",
+                    "Listes_Diffusion_Houdremont"
+                ];
 
-                    if (val !== undefined && val !== "") {
-                        if (multiRefColumns.includes(finalKey)) {
-                            if (typeof val === 'string') {
-                                const ids = val.split(/[,;]/).map(v => parseInt(v.trim(), 10)).filter(n => !isNaN(n));
-                                newRecord[finalKey] = ['L', ...ids];
-                            } else if (Array.isArray(val)) {
-                                const ids = val.map(v => parseInt(v, 10)).filter(n => !isNaN(n));
-                                newRecord[finalKey] = ['L', ...ids];
+                const columnCorrections = {
+                    "Téléphone_Principal": "Telephone_Principal",
+                    "Téléphones_Secondaires": "Telephones_Secondaires"
+                };
+
+                detectedDuplicates = [];
+                const recordsToInsert = parsedData.map(row => {
+                    const newRecord = {};
+                    for (const [origKey, targetKey] of Object.entries(mapping)) {
+                        let val = row[origKey];
+                        const finalKey = columnCorrections[targetKey] || targetKey;
+
+                        if (val !== undefined && val !== "") {
+                            if (multiRefColumns.includes(finalKey)) {
+                                if (typeof val === 'string') {
+                                    const ids = val.split(/[,;]/).map(v => parseInt(v.trim(), 10)).filter(n => !isNaN(n));
+                                    newRecord[finalKey] = ['L', ...ids];
+                                } else if (Array.isArray(val)) {
+                                    const ids = val.map(v => parseInt(v, 10)).filter(n => !isNaN(n));
+                                    newRecord[finalKey] = ['L', ...ids];
+                                } else {
+                                    newRecord[finalKey] = val;
+                                }
                             } else {
                                 newRecord[finalKey] = val;
                             }
-                        } else {
-                            newRecord[finalKey] = val;
                         }
                     }
-                }
 
-                // Injecter les listes de diffusion globales cochées pour chaque contact importé
-                for (const [colName, tagValues] of Object.entries(selectedTagsByColumn)) {
-                    // Format de référence multiple Grist : ['L', id1, id2, ...] ou liste de valeurs
-                    newRecord[colName] = ['L', ...tagValues];
-                }
+                    for (const [colName, tagValues] of Object.entries(selectedTagsByColumn)) {
+                        newRecord[colName] = ['L', ...tagValues];
+                    }
 
-                return newRecord;
-            });
+                    // Détection de doublons (sur EMAIL_PRINCIPAL, EMAILS_SECONDAIRES ou NOM)
+                    const emailP = newRecord.EMAIL_PRINCIPAL ? newRecord.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
+                    const emailS = newRecord.EMAILS_SECONDAIRES ? newRecord.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
+                    const nomContact = newRecord.NOM ? newRecord.NOM.toString().toLowerCase().trim() : "";
 
-            const validRecords = recordsToInsert.filter(rec => Object.keys(rec).length > 0);
+                    let matchFound = null;
+                    let matchReason = "";
 
-            console.log(`Total de lignes à importer : ${validRecords.length}`);
+                    // Recherche dans les contacts existants
+                    for (const ec of existingContacts) {
+                        const ecEmailP = ec.EMAIL_PRINCIPAL ? ec.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
+                        const ecEmailS = ec.EMAILS_SECONDAIRES ? ec.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
+                        const ecNom = ec.NOM ? ec.NOM.toString().toLowerCase().trim() : "";
 
-            try {
+                        if ((emailP && (emailP === ecEmailP || emailP === ecEmailS)) || 
+                            (emailS && (emailS === ecEmailP || emailS === ecEmailS))) {
+                            matchFound = ec;
+                            matchReason = "Correspondance sur l'e-mail";
+                            break;
+                        } else if (nomContact && nomContact === ecNom) {
+                            matchFound = ec;
+                            matchReason = "Correspondance sur le NOM";
+                        }
+                    }
+
+                    if (matchFound) {
+                        detectedDuplicates.push({
+                            imported: newRecord,
+                            existing: matchFound,
+                            reason: matchReason
+                        });
+                    }
+
+                    return newRecord;
+                });
+
+                const validRecords = recordsToInsert.filter(rec => Object.keys(rec).length > 0);
+
                 const batchSize = 100;
                 for (let i = 0; i < validRecords.length; i += batchSize) {
                     const batch = validRecords.slice(i, i + batchSize);
@@ -523,19 +613,87 @@
                         new Promise(resolve => setTimeout(resolve, 8000))
                     ]);
                 }
-                
-                document.getElementById('status-msg').innerText = `Succès ! ${validRecords.length} contacts ont été importés.`;
-                document.getElementById('status-msg').style.color = "var(--success)";
-                
-                setTimeout(() => {
-                    location.reload();
-                }, 2500);
+
+                // Masquer la section de mapping et afficher le rapport
+                document.getElementById('mapping-section').classList.add('hidden');
+                const reportSection = document.getElementById('report-section');
+                reportSection.classList.remove('hidden');
+
+                document.getElementById('report-summary').innerText = `Import de ${validRecords.length} contacts réalisé avec succès !`;
+                document.getElementById('report-summary').style.color = "var(--success)";
+
+                if (detectedDuplicates.length > 0) {
+                    document.getElementById('dup-count').innerText = detectedDuplicates.length;
+                    document.getElementById('duplicate-toggle-container').classList.remove('hidden');
+                    buildDuplicatesTable();
+                } else {
+                    document.getElementById('report-summary').innerText += " Aucun doublon détecté.";
+                }
+
             } catch (err) {
-                console.error("Erreur critique attrapée :", err);
+                console.error("Erreur critique :", err);
                 alert("Échec de l'importation : " + (err.message || JSON.stringify(err)));
                 btn.disabled = false;
                 document.getElementById('status-msg').innerText = "Échec de l'importation.";
             }
+        }
+
+        function toggleDuplicatesView() {
+            const container = document.getElementById('duplicates-container');
+            container.classList.toggle('hidden');
+        }
+
+        function buildDuplicatesTable() {
+            const container = document.getElementById('duplicates-container');
+            container.innerHTML = '';
+
+            detectedDuplicates.forEach((item, index) => {
+                const card = document.createElement('div');
+                card.className = 'duplicate-card';
+
+                const title = document.createElement('div');
+                title.style.cssText = "font-weight: 600; margin-bottom: 8px; color: #b45309;";
+                title.innerText = `Doublon #${index + 1} - Motif : ${item.reason}`;
+                card.appendChild(title);
+
+                const table = document.createElement('table');
+                table.className = 'comparison-table';
+
+                table.innerHTML = `
+                    <thead>
+                        <tr>
+                            <th>Champ</th>
+                            <th>Contact déjà existant dans Grist</th>
+                            <th>Donnée importée (CSV)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><b>Nom / Prénom</b></td>
+                            <td>${item.existing.NOM || ''} ${item.existing.PRENOM || ''}</td>
+                            <td><b>${item.imported.NOM || ''}</b> ${item.imported.PRENOM || ''}</td>
+                        </tr>
+                        <tr>
+                            <td><b>Email Principal</b></td>
+                            <td>${item.existing.EMAIL_PRINCIPAL || '<i>Vide</i>'}</td>
+                            <td><b>${item.imported.EMAIL_PRINCIPAL || '<i>Vide</i>'}</b></td>
+                        </tr>
+                        <tr>
+                            <td><b>Téléphone</b></td>
+                            <td>${item.existing.Telephone_Principal || item.existing.Téléphone_Principal || '<i>Vide</i>'}</td>
+                            <td>${item.imported.Telephone_Principal || item.imported.Téléphone_Principal || '<i>Vide</i>'}</td>
+                        </tr>
+                        <tr>
+                            <td><b>Ville</b></td>
+                            <td>${item.existing.Ville || '<i>Vide</i>'}</td>
+                            <td>${item.imported.Ville || '<i>Vide</i>'}</td>
+                        </tr>
+                    </tbody>
+                `;
+
+                card.appendChild(table);
+                container.appendChild(card);
+            });
         }
     </script>
 </body>
