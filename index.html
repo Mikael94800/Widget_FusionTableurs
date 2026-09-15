@@ -181,7 +181,6 @@
         let parsedData = [];
         let csvHeaders = [];
 
-        // Initialisation de Grist avec accès complet requis
         grist.ready({
             requiredAccess: 'full'
         });
@@ -242,7 +241,6 @@
             const container = document.getElementById('mapping-container');
             container.innerHTML = '';
 
-            // Liste stricte et exclusive des colonnes de la table CONTACTS
             const officialColumns = [
                 "Cree_Par", "Date_Saisie", "Service", "DOMAINE_D_ACTIVITES",
                 "Commentaire_Description", "STATUT_JURIDIQUE", "TYPE_DE_STRUCTURE_CONTACT",
@@ -276,14 +274,14 @@
                 select.appendChild(defaultOpt);
 
                 let matched = false;
-                const cleanHeader = header.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const cleanHeader = header.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
 
                 officialColumns.forEach(col => {
                     const opt = document.createElement('option');
                     opt.value = col;
                     opt.innerText = col;
 
-                    const cleanCol = col.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    const cleanCol = col.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
                     if (cleanHeader === cleanCol || cleanHeader.includes(cleanCol) || cleanCol.includes(cleanHeader)) {
                         opt.selected = true;
                         matched = true;
@@ -340,23 +338,32 @@
                 "Listes_Diffusion_Houdremont"
             ];
 
+            // Table de correspondance exacte pour sécuriser les noms de colonnes sensibles
+            const columnCorrections = {
+                "Téléphone_Principal": "Telephone_Principal", // Ajustez ici si votre table s'appelle Telephone sans accent
+                "Téléphones_Secondaires": "Telephones_Secondaires"
+            };
+
             const recordsToInsert = parsedData.map(row => {
                 const newRecord = {};
                 for (const [origKey, targetKey] of Object.entries(mapping)) {
                     let val = row[origKey];
+                    // Correction automatique de la clé si elle diffère dans Grist
+                    const finalKey = columnCorrections[targetKey] || targetKey;
+
                     if (val !== undefined && val !== "") {
-                        if (multiRefColumns.includes(targetKey)) {
+                        if (multiRefColumns.includes(finalKey)) {
                             if (typeof val === 'string') {
                                 const ids = val.split(/[,;]/).map(v => parseInt(v.trim(), 10)).filter(n => !isNaN(n));
-                                newRecord[targetKey] = ['L', ...ids];
+                                newRecord[finalKey] = ['L', ...ids];
                             } else if (Array.isArray(val)) {
                                 const ids = val.map(v => parseInt(v, 10)).filter(n => !isNaN(n));
-                                newRecord[targetKey] = ['L', ...ids];
+                                newRecord[finalKey] = ['L', ...ids];
                             } else {
-                                newRecord[targetKey] = val;
+                                newRecord[finalKey] = val;
                             }
                         } else {
-                            newRecord[targetKey] = val;
+                            newRecord[finalKey] = val;
                         }
                     }
                 }
@@ -373,8 +380,6 @@
                     const batch = validRecords.slice(i, i + batchSize);
                     const currentSent = Math.min(i + batchSize, validRecords.length);
                     document.getElementById('status-msg').innerText = `Envoi en cours (${currentSent} / ${validRecords.length})...`;
-                    
-                    console.log(`Envoi du lot ${i} à ${currentSent} vers CONTACTS...`);
                     
                     const actions = batch.map(record => ['AddRecord', 'CONTACTS', null, record]);
 
