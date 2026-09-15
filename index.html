@@ -180,16 +180,10 @@
     <script>
         let parsedData = [];
         let csvHeaders = [];
-        let gristColumns = [];
 
+        // Initialisation de Grist avec accès complet requis
         grist.ready({
             requiredAccess: 'full'
-        });
-
-        grist.onRecord(function(record, mappings) {
-            if (record) {
-                gristColumns = Object.keys(record);
-            }
         });
 
         function handleDragOver(e) {
@@ -248,6 +242,7 @@
             const container = document.getElementById('mapping-container');
             container.innerHTML = '';
 
+            // Liste stricte et exclusive des colonnes de la table CONTACTS
             const officialColumns = [
                 "Cree_Par", "Date_Saisie", "Service", "DOMAINE_D_ACTIVITES",
                 "Commentaire_Description", "STATUT_JURIDIQUE", "TYPE_DE_STRUCTURE_CONTACT",
@@ -256,8 +251,6 @@
                 "Code_Postal", "Ville", "Adresse", "Pays", "Listes_Diffusion_Intervenants",
                 "Listes_Diffusion_Cinema", "Listes_Diffusion_Direction", "Listes_Diffusion_Houdremont", "Erreur_emails"
             ];
-            
-            let availableCols = [...new Set([...gristColumns, ...officialColumns])].filter(Boolean);
 
             csvHeaders.forEach(header => {
                 const card = document.createElement('div');
@@ -285,7 +278,7 @@
                 let matched = false;
                 const cleanHeader = header.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-                availableCols.forEach(col => {
+                officialColumns.forEach(col => {
                     const opt = document.createElement('option');
                     opt.value = col;
                     opt.innerText = col;
@@ -383,7 +376,6 @@
                     
                     console.log(`Envoi du lot ${i} à ${currentSent} vers CONTACTS...`);
                     
-                    // Utilisation de l'API Document pour cibler de force la table CONTACTS explicitement
                     const actions = batch.map(record => ['AddRecord', 'CONTACTS', null, record]);
 
                     await Promise.race([
