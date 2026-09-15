@@ -5,6 +5,7 @@
     <title>Importateur Intelligent de Contacts</title>
     <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         :root {
             --primary: #4f46e5;
@@ -300,7 +301,7 @@
 <body>
 
     <div class="container">
-        <h2>Importer un fichier de contacts (.csv)</h2>
+        <h2>Importer un fichier de contacts (.csv, .xlsx, .xls)</h2>
 
         <div id="upload-section" class="drop-zone" 
              onclick="document.getElementById('csvFile').click()"
@@ -310,9 +311,9 @@
             <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color: var(--primary); margin-bottom: 10px;">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
             </svg>
-            <p style="margin: 0 0 10px 0; color: var(--text-muted);">Glissez votre fichier CSV ici ou</p>
+            <p style="margin: 0 0 10px 0; color: var(--text-muted);">Glissez votre fichier CSV ou Excel ici ou</p>
             <button class="btn" type="button">Parcourir les fichiers</button>
-            <input type="file" id="csvFile" accept=".csv" onchange="handleFileSelect(event)">
+            <input type="file" id="csvFile" accept=".csv, .xlsx, .xls" onchange="handleFileSelect(event)">
         </div>
 
         <div id="mapping-section" class="hidden">
@@ -414,7 +415,6 @@
             }
         }
 
-        // Fonction ultra-robuste pour extraire le texte d'un enregistrement de référence
         function getRefLabel(records, id) {
             if (id === undefined || id === null || id === "") return "";
             const numId = parseInt(id, 10);
@@ -423,7 +423,6 @@
             const found = records.find(r => r.id === numId);
             if (!found) return `ID: ${id}`;
 
-            // 1. Chercher parmi les noms de champs textuels courants
             const priorityKeys = ['NOM', 'Nom', 'nom', 'LIBELLE', 'Libelle', 'libelle', 'INTITULE', 'Intitule', 'intitule', 'TITRE', 'Titre', 'titre', 'DESCRIPTION', 'Description', 'description', 'LABEL', 'Label', 'label'];
             for (const k of priorityKeys) {
                 if (found[k] !== undefined && found[k] !== null && String(found[k]).trim() !== '') {
@@ -431,7 +430,6 @@
                 }
             }
 
-            // 2. Sinon, prendre la première propriété textuelle disponible (qui n'est pas l'id)
             for (const [k, v] of Object.entries(found)) {
                 if (k !== 'id' && v !== null && v !== undefined && String(v).trim() !== '') {
                     return String(v);
@@ -473,22 +471,47 @@
 
         async function processFile(file) {
             await preloadReferenceTables();
-            Papa.parse(file, {
-                header: true,
-                skipEmptyLines: true,
-                complete: function(results) {
-                    parsedData = results.data;
-                    if (parsedData.length === 0) {
-                        alert("Le fichier CSV est vide.");
-                        return;
+            const fileName = file.name.toLowerCase();
+
+            if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, {type: 'array'});
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        
+                        parsedData = XLSX.utils.sheet_to_json(worksheet, {defval: ""});
+                        if (parsedData.length === 0) {
+                            alert("Le fichier Excel est vide.");
+                            return;
+                        }
+                        csvHeaders = Object.keys(parsedData[0]);
+                        showMappingInterface();
+                    } catch (err) {
+                        alert("Erreur lors de la lecture du fichier Excel : " + err.message);
                     }
-                    csvHeaders = results.meta.fields;
-                    showMappingInterface();
-                },
-                error: function(err) {
-                    alert("Erreur lors de la lecture du CSV : " + err.message);
-                }
-            });
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        parsedData = results.data;
+                        if (parsedData.length === 0) {
+                            alert("Le fichier CSV est vide.");
+                            return;
+                        }
+                        csvHeaders = results.meta.fields;
+                        showMappingInterface();
+                    },
+                    error: function(err) {
+                        alert("Erreur lors de la lecture du CSV : " + err.message);
+                    }
+                });
+            }
         }
 
         async function showMappingInterface() {
@@ -513,7 +536,7 @@
                 card.dataset.original = header;
 
                 const labelCol = document.createElement('label');
-                labelCol.innerText = "Colonne du CSV :";
+                labelCol.innerText = "Colonne du fichier :";
 
                 const titleCol = document.createElement('div');
                 titleCol.className = 'csv-col-name';
@@ -698,7 +721,7 @@
                         let val = row[origKey];
                         const finalKey = columnCorrections[targetKey] || targetKey;
 
-                        if (val !== undefined && val !== "") {
+                        if (val !== undefined && val !== "" && val !== null) {
                             if (multiRefColumns.includes(finalKey)) {
                                 if (typeof val === 'string') {
                                     const ids = val.split(/[,;]/).map(v => parseInt(v.trim(), 10)).filter(n => !isNaN(n));
@@ -721,7 +744,6 @@
                         }
                     }
 
-                    // Détection des doublons
                     const emailP = newRecord.EMAIL_PRINCIPAL ? newRecord.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
                     const emailS = newRecord.EMAILS_SECONDAIRES ? newRecord.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
                     const nomContact = newRecord.NOM ? newRecord.NOM.toString().toLowerCase().trim() : "";
@@ -756,7 +778,6 @@
                     }
                 });
 
-                // Insertion directe des non-doublons par lots de 100
                 const batchSize = 100;
                 for (let i = 0; i < recordsToInsert.length; i += batchSize) {
                     const batch = recordsToInsert.slice(i, i + batchSize);
@@ -871,7 +892,6 @@
                     </div>
 
                     <div class="resolver-grid">
-                        <!-- Colonne Gauche : Ancienne Fiche -->
                         <div class="resolver-column">
                             <h4>Fiche Existante (Grist)</h4>
                             <div class="form-group"><label>Nom / Prénom</label><input type="text" disabled value="${ext.NOM || ''} ${ext.PRENOM || ''}"></div>
@@ -887,7 +907,6 @@
                             <div class="form-group"><label>Commentaire / Description</label><textarea disabled>${ext.Commentaire_Description || ''}</textarea></div>
                         </div>
 
-                        <!-- Colonne Droite : Nouvelle Fiche Modifiable / Fusionnée -->
                         <div class="resolver-column" style="background: #fdfdfd; border-color: var(--primary);">
                             <h4>Proposition Modifiable (Fusion)</h4>
                             <div class="form-group"><label>Nom</label><input type="text" id="edit-nom" value="${imp.NOM || ext.NOM || ''}"></div>
