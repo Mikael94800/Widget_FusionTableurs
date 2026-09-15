@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Importateur Intelligent de Contacts</title>
-    <!-- Chargement des scripts Grist et PapaParse -->
     <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <style>
@@ -45,7 +44,6 @@
             margin-bottom: 20px;
         }
 
-        /* Zone de glisser-déposer */
         .drop-zone {
             border: 2px dashed var(--border);
             border-radius: 8px;
@@ -87,7 +85,6 @@
             cursor: not-allowed;
         }
 
-        /* Grille de mapping */
         #mapping-container {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -151,7 +148,6 @@
     <div class="container">
         <h2>Importer un fichier de contacts (.csv)</h2>
 
-        <!-- Étape 1 : Upload avec Glisser/Déposer fonctionnel -->
         <div id="upload-section" class="drop-zone" 
              onclick="document.getElementById('csvFile').click()"
              ondragover="handleDragOver(event)"
@@ -165,7 +161,6 @@
             <input type="file" id="csvFile" accept=".csv" onchange="handleFileSelect(event)">
         </div>
 
-        <!-- Étape 2 : Mapping des colonnes -->
         <div id="mapping-section" class="hidden">
             <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 15px;">
                 Vérifiez l'association des colonnes de votre fichier avec vos champs Grist. Les éléments en rouge n'ont pas pu être reconnus automatiquement : veuillez leur assigner la bonne colonne cible.
@@ -187,19 +182,16 @@
         let csvHeaders = [];
         let gristColumns = [];
 
-        // Initialisation de Grist
         grist.ready({
             requiredAccess: 'full'
         });
 
-        // Récupération dynamique des colonnes de la table active
         grist.onRecord(function(record, mappings) {
             if (record) {
                 gristColumns = Object.keys(record);
             }
         });
 
-        // Gestion du Glisser / Déposer (Drag & Drop)
         function handleDragOver(e) {
             e.preventDefault();
             e.stopPropagation();
@@ -256,32 +248,13 @@
             const container = document.getElementById('mapping-container');
             container.innerHTML = '';
 
-            // Liste exacte des identifiants techniques de la table CONTACTS
             const officialColumns = [
-                "Cree_Par",
-                "Date_Saisie",
-                "Service",
-                "DOMAINE_D_ACTIVITES",
-                "Commentaire_Description",
-                "STATUT_JURIDIQUE",
-                "TYPE_DE_STRUCTURE_CONTACT",
-                "NOM_Structure",
-                "NOM",
-                "PRENOM",
-                "EMAIL_PRINCIPAL",
-                "EMAILS_SECONDAIRES",
-                "Téléphone_Principal",
-                "Téléphones_Secondaires",
-                "Fonction_Profession",
-                "Code_Postal",
-                "Ville",
-                "Adresse",
-                "Pays",
-                "Listes_Diffusion_Intervenants",
-                "Listes_Diffusion_Cinema",
-                "Listes_Diffusion_Direction",
-                "Listes_Diffusion_Houdremont",
-                "Erreur_emails"
+                "Cree_Par", "Date_Saisie", "Service", "DOMAINE_D_ACTIVITES",
+                "Commentaire_Description", "STATUT_JURIDIQUE", "TYPE_DE_STRUCTURE_CONTACT",
+                "NOM_Structure", "NOM", "PRENOM", "EMAIL_PRINCIPAL", "EMAILS_SECONDAIRES",
+                "Téléphone_Principal", "Téléphones_Secondaires", "Fonction_Profession",
+                "Code_Postal", "Ville", "Adresse", "Pays", "Listes_Diffusion_Intervenants",
+                "Listes_Diffusion_Cinema", "Listes_Diffusion_Direction", "Listes_Diffusion_Houdremont", "Erreur_emails"
             ];
             
             let availableCols = [...new Set([...gristColumns, ...officialColumns])].filter(Boolean);
@@ -367,7 +340,6 @@
             btn.disabled = true;
             document.getElementById('status-msg').innerText = "Préparation des données...";
 
-            // Liste des colonnes de type "Référence multiple" (nécessite le format Grist ['L', id1, id2, ...])
             const multiRefColumns = [
                 "Listes_Diffusion_Intervenants",
                 "Listes_Diffusion_Cinema",
@@ -401,7 +373,6 @@
             const validRecords = recordsToInsert.filter(rec => Object.keys(rec).length > 0);
 
             console.log(`Total de lignes à importer : ${validRecords.length}`);
-            console.log("Exemple du premier enregistrement formaté :", validRecords[0]);
 
             try {
                 const batchSize = 100;
@@ -410,13 +381,10 @@
                     const currentSent = Math.min(i + batchSize, validRecords.length);
                     document.getElementById('status-msg').innerText = `Envoi en cours (${currentSent} / ${validRecords.length})...`;
                     
-                    console.log(`Envoi du lot ${i} à ${currentSent} vers CONTACTS...`);
+                    console.log(`Envoi du lot ${i} à ${currentSent}...`);
                     
-                    // Construction explicite des actions d'ajout pour cibler de force la table "CONTACTS"
-                    const actions = batch.map(record => ['AddRecord', 'CONTACTS', record]);
-
                     await Promise.race([
-                        grist.docApi.applyUserActions(actions),
+                        grist.selectedTable.create(batch),
                         new Promise(resolve => setTimeout(resolve, 8000))
                     ]);
                 }
