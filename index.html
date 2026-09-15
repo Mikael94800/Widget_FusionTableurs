@@ -387,7 +387,6 @@
                     opt.innerText = col;
 
                     const cleanCol = col.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
-                    // Correspondance exacte ou stricte pour éviter les faux positifs (ex: NOM vs PRENOM)
                     if (cleanHeader === cleanCol) {
                         opt.selected = true;
                         matched = true;
@@ -430,14 +429,34 @@
             ];
 
             try {
-                // Détection automatique du nom exact de la table des étiquettes (insensible à la casse)
                 const tables = await grist.docApi.listTables();
                 const foundTable = tables.find(t => t.toLowerCase() === 'etiquettes');
                 if (foundTable) {
                     actualEtiquettesTableName = foundTable;
                 }
 
-                const records = await grist.docApi.fetchTable(actualEtiquettesTableName);
+                const rawRecords = await grist.docApi.fetchTable(actualEtiquettesTableName);
+                
+                // Transformation universelle de rawRecords en tableau propre de lignes
+                let records = [];
+                if (Array.isArray(rawRecords)) {
+                    records = rawRecords;
+                } else if (rawRecords && typeof rawRecords === 'object') {
+                    if (Array.isArray(rawRecords.id)) {
+                        records = rawRecords.id.map((id, index) => {
+                            const row = { id: id };
+                            for (const key of Object.keys(rawRecords)) {
+                                if (Array.isArray(rawRecords[key])) {
+                                    row[key] = rawRecords[key][index];
+                                }
+                            }
+                            return row;
+                        });
+                    } else {
+                        records = Object.values(rawRecords);
+                    }
+                }
+
                 tagsContainer.innerHTML = '';
 
                 listColumns.forEach(group => {
@@ -524,7 +543,23 @@
             document.getElementById('status-msg').innerText = "Analyse des doublons et préparation...";
 
             try {
-                const existingContacts = await grist.docApi.fetchTable('CONTACTS');
+                const rawExisting = await grist.docApi.fetchTable('CONTACTS');
+                let existingContacts = [];
+                if (Array.isArray(rawExisting)) {
+                    existingContacts = rawExisting;
+                } else if (rawExisting && typeof rawExisting === 'object' && Array.isArray(rawExisting.id)) {
+                    existingContacts = rawExisting.id.map((id, index) => {
+                        const row = { id: id };
+                        for (const key of Object.keys(rawExisting)) {
+                            if (Array.isArray(rawExisting[key])) {
+                                row[key] = rawExisting[key][index];
+                            }
+                        }
+                        return row;
+                    });
+                } else if (rawExisting) {
+                    existingContacts = Object.values(rawExisting);
+                }
 
                 const multiRefColumns = [
                     "Listes_Diffusion_Intervenants",
