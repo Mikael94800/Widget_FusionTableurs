@@ -34,7 +34,7 @@
         }
 
         .container {
-            max-width: 1000px;
+            max-width: 1050px;
             margin: 0 auto;
             background: var(--card-bg);
             padding: 24px;
@@ -217,7 +217,6 @@
             padding-top: 20px;
         }
 
-        /* Interface de gestion des doublons interactive */
         .duplicate-resolver-container {
             margin-top: 20px;
             background: var(--warning-bg);
@@ -253,6 +252,8 @@
             border: 1px solid var(--border);
             border-radius: 8px;
             padding: 15px;
+            max-height: 500px;
+            overflow-y: auto;
         }
 
         .resolver-column h4 {
@@ -274,13 +275,18 @@
             margin-bottom: 2px;
         }
 
-        .form-group input {
+        .form-group input, .form-group textarea {
             width: 100%;
             padding: 6px 10px;
             border: 1px solid var(--border);
             border-radius: 4px;
             font-size: 0.85rem;
             box-sizing: border-box;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            height: 60px;
         }
 
         .resolver-actions {
@@ -751,18 +757,56 @@
             const ext = item.existing;
             const imp = item.imported;
 
-            // Proposition de fusion intelligente automatique
+            // --- FUSION INTELLIGENTE AUTOMATIQUE DES CHAMPS ---
+            // 1. Emails secondaires
             let mergedEmailSec = ext.EMAILS_SECONDAIRES || "";
             if (imp.EMAIL_PRINCIPAL && imp.EMAIL_PRINCIPAL !== ext.EMAIL_PRINCIPAL && !mergedEmailSec.includes(imp.EMAIL_PRINCIPAL)) {
                 mergedEmailSec = mergedEmailSec ? mergedEmailSec + ", " + imp.EMAIL_PRINCIPAL : imp.EMAIL_PRINCIPAL;
             }
-
-            let mergedTelSec = ext.Telephones_Secondaires || ext.Téléphones_Secondaires || "";
-            const impTel = imp.Telephone_Principal || imp.Téléphone_Principal || "";
-            const extTel = ext.Telephone_Principal || ext.Téléphone_Principal || "";
-            if (impTel && impTel !== extTel && !mergedTelSec.includes(impTel)) {
-                mergedTelSec = mergedTelSec ? mergedTelSec + ", " + impTel : impTel;
+            if (imp.EMAILS_SECONDAIRES) {
+                imp.EMAILS_SECONDAIRES.split(',').forEach(e => {
+                    const cleanE = e.trim();
+                    if (cleanE && !mergedEmailSec.includes(cleanE)) {
+                        mergedEmailSec = mergedEmailSec ? mergedEmailSec + ", " + cleanE : cleanE;
+                    }
+                });
             }
+
+            // 2. Téléphones secondaires
+            const extTelSec = ext.Telephones_Secondaires || ext.Téléphones_Secondaires || "";
+            const impTelSec = imp.Telephones_Secondaires || imp.Téléphones_Secondaires || "";
+            const impTelPrin = imp.Telephone_Principal || imp.Téléphone_Principal || "";
+            const extTelPrin = ext.Telephone_Principal || ext.Téléphone_Principal || "";
+
+            let mergedTelSec = extTelSec;
+            if (impTelPrin && impTelPrin !== extTelPrin && !mergedTelSec.includes(impTelPrin)) {
+                mergedTelSec = mergedTelSec ? mergedTelSec + ", " + impTelPrin : impTelPrin;
+            }
+            if (impTelSec) {
+                impTelSec.split(',').forEach(t => {
+                    const cleanT = t.trim();
+                    if (cleanT && !mergedTelSec.includes(cleanT)) {
+                        mergedTelSec = mergedTelSec ? mergedTelSec + ", " + cleanT : cleanT;
+                    }
+                });
+            }
+
+            // 3. Adresse (remplissage si vide)
+            const mergedAdresse = ext.Adresse || imp.Adresse || "";
+
+            // 4. Nom de structure (remplissage si vide)
+            const mergedNomStruct = ext.NOM_Structure || imp.NOM_Structure || "";
+
+            // 5. Commentaires / Description (fusion ou complément)
+            let mergedComment = ext.Commentaire_Description || "";
+            if (imp.Commentaire_Description && imp.Commentaire_Description !== ext.Commentaire_Description) {
+                mergedComment = mergedComment ? mergedComment + "\n---\n" + imp.Commentaire_Description : imp.Commentaire_Description;
+            }
+
+            // 6. Type de structure & Domaine & Statut juridique
+            const mergedTypeStruct = ext.TYPE_DE_STRUCTURE_CONTACT || imp.TYPE_DE_STRUCTURE_CONTACT || "";
+            const mergedDomaine = ext.DOMAINE_D_ACTIVITES || imp.DOMAINE_D_ACTIVITES || "";
+            const mergedStatutJur = ext.STATUT_JURIDIQUE || imp.STATUT_JURIDIQUE || "";
 
             wrapper.innerHTML = `
                 <div class="duplicate-resolver-container">
@@ -778,8 +822,14 @@
                             <div class="form-group"><label>Nom / Prénom</label><input type="text" disabled value="${ext.NOM || ''} ${ext.PRENOM || ''}"></div>
                             <div class="form-group"><label>Email Principal</label><input type="text" disabled value="${ext.EMAIL_PRINCIPAL || ''}"></div>
                             <div class="form-group"><label>Emails Secondaires</label><input type="text" disabled value="${ext.EMAILS_SECONDAIRES || ''}"></div>
-                            <div class="form-group"><label>Téléphone</label><input type="text" disabled value="${extTel}"></div>
-                            <div class="form-group"><label>Ville</label><input type="text" disabled value="${ext.Ville || ''}"></div>
+                            <div class="form-group"><label>Téléphone Principal</label><input type="text" disabled value="${extTelPrin}"></div>
+                            <div class="form-group"><label>Téléphones Secondaires</label><input type="text" disabled value="${extTelSec}"></div>
+                            <div class="form-group"><label>Nom Structure</label><input type="text" disabled value="${ext.NOM_Structure || ''}"></div>
+                            <div class="form-group"><label>Adresse</label><input type="text" disabled value="${ext.Adresse || ''}"></div>
+                            <div class="form-group"><label>Type de Structure</label><input type="text" disabled value="${ext.TYPE_DE_STRUCTURE_CONTACT || ''}"></div>
+                            <div class="form-group"><label>Domaine d'activités</label><input type="text" disabled value="${ext.DOMAINE_D_ACTIVITES || ''}"></div>
+                            <div class="form-group"><label>Statut juridique</label><input type="text" disabled value="${ext.STATUT_JURIDIQUE || ''}"></div>
+                            <div class="form-group"><label>Commentaire / Description</label><textarea disabled>${ext.Commentaire_Description || ''}</textarea></div>
                         </div>
 
                         <!-- Colonne Droite : Nouvelle Fiche Modifiable / Fusionnée -->
@@ -788,9 +838,15 @@
                             <div class="form-group"><label>Nom</label><input type="text" id="edit-nom" value="${imp.NOM || ext.NOM || ''}"></div>
                             <div class="form-group"><label>Prénom</label><input type="text" id="edit-prenom" value="${imp.PRENOM || ext.PRENOM || ''}"></div>
                             <div class="form-group"><label>Email Principal</label><input type="text" id="edit-emailp" value="${ext.EMAIL_PRINCIPAL || imp.EMAIL_PRINCIPAL || ''}"></div>
-                            <div class="form-group"><label>Emails Secondaires (mis à jour)</label><input type="text" id="edit-emails" value="${mergedEmailSec}"></div>
-                            <div class="form-group"><label>Téléphone Principal</label><input type="text" id="edit-telp" value="${extTel || impTel}"></div>
-                            <div class="form-group"><label>Ville</label><input type="text" id="edit-ville" value="${imp.Ville || ext.Ville || ''}"></div>
+                            <div class="form-group"><label>Emails Secondaires (fusionnés)</label><input type="text" id="edit-emails" value="${mergedEmailSec}"></div>
+                            <div class="form-group"><label>Téléphone Principal</label><input type="text" id="edit-telp" value="${extTelPrin || impTelPrin}"></div>
+                            <div class="form-group"><label>Téléphones Secondaires (fusionnés)</label><input type="text" id="edit-tels" value="${mergedTelSec}"></div>
+                            <div class="form-group"><label>Nom Structure</label><input type="text" id="edit-nomstruct" value="${mergedNomStruct}"></div>
+                            <div class="form-group"><label>Adresse</label><input type="text" id="edit-adresse" value="${mergedAdresse}"></div>
+                            <div class="form-group"><label>Type de Structure</label><input type="text" id="edit-typestruct" value="${mergedTypeStruct}"></div>
+                            <div class="form-group"><label>Domaine d'activités</label><input type="text" id="edit-domaine" value="${mergedDomaine}"></div>
+                            <div class="form-group"><label>Statut juridique</label><input type="text" id="edit-statut" value="${mergedStatutJur}"></div>
+                            <div class="form-group"><label>Commentaire / Description</label><textarea id="edit-commentaire">${mergedComment}</textarea></div>
                         </div>
                     </div>
 
@@ -813,7 +869,13 @@
                         EMAIL_PRINCIPAL: document.getElementById('edit-emailp').value,
                         EMAILS_SECONDAIRES: document.getElementById('edit-emails').value,
                         Telephone_Principal: document.getElementById('edit-telp').value,
-                        Ville: document.getElementById('edit-ville').value
+                        Telephones_Secondaires: document.getElementById('edit-tels').value,
+                        NOM_Structure: document.getElementById('edit-nomstruct').value,
+                        Adresse: document.getElementById('edit-adresse').value,
+                        TYPE_DE_STRUCTURE_CONTACT: document.getElementById('edit-typestruct').value,
+                        DOMAINE_D_ACTIVITES: document.getElementById('edit-domaine').value,
+                        STATUT_JURIDIQUE: document.getElementById('edit-statut').value,
+                        Commentaire_Description: document.getElementById('edit-commentaire').value
                     };
 
                     // Mise à jour de la fiche existante dans Grist
@@ -821,7 +883,7 @@
                         ['UpdateRecord', 'CONTACTS', item.existing.id, updatedFields]
                     ]);
                 }
-                // Si l'action est 'delete', on ne fait rien sur Grist (les données importées sont simplement écartées)
+                // Si l'action est 'delete', on ignore simplement la ligne importée (aucun ajout/modif)
 
                 currentDuplicateIndex++;
                 renderCurrentDuplicate();
