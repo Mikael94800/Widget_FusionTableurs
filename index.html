@@ -1,1 +1,402 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Importateur Intelligent de Contacts</title>
+    <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border: #cbd5e1;
+            --error-bg: #ffeeec;
+            --error-border: #ef4444;
+            --success: #10b981;
+        }
 
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+
+        h2 {
+            margin-top: 0;
+            color: var(--text-main);
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+        }
+
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            background: #fafafa;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            margin-bottom: 20px;
+        }
+
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--primary);
+            background: #f0fdf4;
+        }
+
+        .drop-zone input {
+            display: none;
+        }
+
+        .btn {
+            background-color: var(--primary);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+
+        .btn:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .btn:disabled {
+            background-color: var(--border);
+            cursor: not-allowed;
+        }
+
+        #mapping-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .mapping-card {
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .mapping-card.unmatched {
+            border-color: var(--error-border);
+            background-color: var(--error-bg);
+        }
+
+        .mapping-card label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .mapping-card .csv-col-name {
+            font-weight: 600;
+            font-size: 1rem;
+            margin-bottom: 8px;
+            color: var(--text-main);
+            word-break: break-all;
+        }
+
+        .mapping-card select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: white;
+            font-size: 0.95rem;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        #status-container {
+            margin-top: 15px;
+            font-weight: 500;
+        }
+
+        #status-msg {
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Importer un fichier de contacts (.csv)</h2>
+
+        <div id="upload-section" class="drop-zone" 
+             onclick="document.getElementById('csvFile').click()"
+             ondragover="handleDragOver(event)"
+             ondragleave="handleDragLeave(event)"
+             ondrop="handleDrop(event)">
+            <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color: var(--primary); margin-bottom: 10px;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            <p style="margin: 0 0 10px 0; color: var(--text-muted);">Glissez votre fichier CSV ici ou</p>
+            <button class="btn" type="button">Parcourir les fichiers</button>
+            <input type="file" id="csvFile" accept=".csv" onchange="handleFileSelect(event)">
+        </div>
+
+        <div id="mapping-section" class="hidden">
+            <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 15px;">
+                Vérifiez l'association des colonnes de votre fichier avec vos champs Grist. Les éléments en rouge n'ont pas pu être reconnus automatiquement : veuillez leur assigner la bonne colonne cible.
+            </p>
+            
+            <div id="mapping-container"></div>
+
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <button id="btnImport" class="btn" onclick="executeImport()">Lancer l'intégration</button>
+                <div id="status-container">
+                    <span id="status-msg"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let parsedData = [];
+        let csvHeaders = [];
+
+        // Initialisation de Grist avec accès complet requis
+        grist.ready({
+            requiredAccess: 'full'
+        });
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.currentTarget.classList.add('dragover');
+        }
+
+        function handleDragLeave(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.currentTarget.classList.remove('dragover');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.currentTarget.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                processFile(files[0]);
+            }
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                processFile(file);
+            }
+        }
+
+        function processFile(file) {
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    parsedData = results.data;
+                    if (parsedData.length === 0) {
+                        alert("Le fichier CSV est vide.");
+                        return;
+                    }
+                    csvHeaders = results.meta.fields;
+                    showMappingInterface();
+                },
+                error: function(err) {
+                    alert("Erreur lors de la lecture du CSV : " + err.message);
+                }
+            });
+        }
+
+        function showMappingInterface() {
+            document.getElementById('upload-section').classList.add('hidden');
+            document.getElementById('mapping-section').classList.remove('hidden');
+
+            const container = document.getElementById('mapping-container');
+            container.innerHTML = '';
+
+            // Liste stricte et exclusive des colonnes de la table CONTACTS
+            const officialColumns = [
+                "Cree_Par", "Date_Saisie", "Service", "DOMAINE_D_ACTIVITES",
+                "Commentaire_Description", "STATUT_JURIDIQUE", "TYPE_DE_STRUCTURE_CONTACT",
+                "NOM_Structure", "NOM", "PRENOM", "EMAIL_PRINCIPAL", "EMAILS_SECONDAIRES",
+                "Téléphone_Principal", "Téléphones_Secondaires", "Fonction_Profession",
+                "Code_Postal", "Ville", "Adresse", "Pays", "Listes_Diffusion_Intervenants",
+                "Listes_Diffusion_Cinema", "Listes_Diffusion_Direction", "Listes_Diffusion_Houdremont", "Erreur_emails"
+            ];
+
+            csvHeaders.forEach(header => {
+                const card = document.createElement('div');
+                card.className = 'mapping-card';
+                card.dataset.original = header;
+
+                const labelCol = document.createElement('label');
+                labelCol.innerText = "Colonne du CSV :";
+
+                const titleCol = document.createElement('div');
+                titleCol.className = 'csv-col-name';
+                titleCol.innerText = header;
+
+                const labelTarget = document.createElement('label');
+                labelTarget.innerText = "Correspondance Grist :";
+
+                const select = document.createElement('select');
+                select.className = 'mapping-select';
+
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = "";
+                defaultOpt.innerText = "-- Ignorer / Non assigné --";
+                select.appendChild(defaultOpt);
+
+                let matched = false;
+                const cleanHeader = header.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+                officialColumns.forEach(col => {
+                    const opt = document.createElement('option');
+                    opt.value = col;
+                    opt.innerText = col;
+
+                    const cleanCol = col.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (cleanHeader === cleanCol || cleanHeader.includes(cleanCol) || cleanCol.includes(cleanHeader)) {
+                        opt.selected = true;
+                        matched = true;
+                    }
+
+                    select.appendChild(opt);
+                });
+
+                if (!matched) {
+                    card.classList.add('unmatched');
+                }
+
+                select.addEventListener('change', function() {
+                    if (this.value) {
+                        card.classList.remove('unmatched');
+                    } else {
+                        card.classList.add('unmatched');
+                    }
+                });
+
+                card.appendChild(labelCol);
+                card.appendChild(titleCol);
+                card.appendChild(labelTarget);
+                card.appendChild(select);
+                container.appendChild(card);
+            });
+        }
+
+        async function executeImport() {
+            const selects = document.querySelectorAll('.mapping-select');
+            const mapping = {};
+            
+            selects.forEach(select => {
+                const originalHeader = select.closest('.mapping-card').dataset.original;
+                const targetCol = select.value;
+                if (targetCol) {
+                    mapping[originalHeader] = targetCol;
+                }
+            });
+
+            if (Object.keys(mapping).length === 0) {
+                alert("Veuillez associer au moins une colonne avant d'importer.");
+                return;
+            }
+
+            const btn = document.getElementById('btnImport');
+            btn.disabled = true;
+            document.getElementById('status-msg').innerText = "Préparation des données...";
+
+            const multiRefColumns = [
+                "Listes_Diffusion_Intervenants",
+                "Listes_Diffusion_Cinema",
+                "Listes_Diffusion_Direction",
+                "Listes_Diffusion_Houdremont"
+            ];
+
+            const recordsToInsert = parsedData.map(row => {
+                const newRecord = {};
+                for (const [origKey, targetKey] of Object.entries(mapping)) {
+                    let val = row[origKey];
+                    if (val !== undefined && val !== "") {
+                        if (multiRefColumns.includes(targetKey)) {
+                            if (typeof val === 'string') {
+                                const ids = val.split(/[,;]/).map(v => parseInt(v.trim(), 10)).filter(n => !isNaN(n));
+                                newRecord[targetKey] = ['L', ...ids];
+                            } else if (Array.isArray(val)) {
+                                const ids = val.map(v => parseInt(v, 10)).filter(n => !isNaN(n));
+                                newRecord[targetKey] = ['L', ...ids];
+                            } else {
+                                newRecord[targetKey] = val;
+                            }
+                        } else {
+                            newRecord[targetKey] = val;
+                        }
+                    }
+                }
+                return newRecord;
+            });
+
+            const validRecords = recordsToInsert.filter(rec => Object.keys(rec).length > 0);
+
+            console.log(`Total de lignes à importer : ${validRecords.length}`);
+
+            try {
+                const batchSize = 100;
+                for (let i = 0; i < validRecords.length; i += batchSize) {
+                    const batch = validRecords.slice(i, i + batchSize);
+                    const currentSent = Math.min(i + batchSize, validRecords.length);
+                    document.getElementById('status-msg').innerText = `Envoi en cours (${currentSent} / ${validRecords.length})...`;
+                    
+                    console.log(`Envoi du lot ${i} à ${currentSent} vers CONTACTS...`);
+                    
+                    const actions = batch.map(record => ['AddRecord', 'CONTACTS', null, record]);
+
+                    await Promise.race([
+                        grist.docApi.applyUserActions(actions),
+                        new Promise(resolve => setTimeout(resolve, 8000))
+                    ]);
+                }
+                
+                document.getElementById('status-msg').innerText = `Succès ! ${validRecords.length} contacts ont été importés.`;
+                document.getElementById('status-msg').style.color = "var(--success)";
+                
+                setTimeout(() => {
+                    location.reload();
+                }, 2500);
+            } catch (err) {
+                console.error("Erreur critique attrapée :", err);
+                alert("Échec de l'importation : " + (err.message || JSON.stringify(err)));
+                btn.disabled = false;
+                document.getElementById('status-msg').innerText = "Échec de l'importation.";
+            }
+        }
+    </script>
+</body>
+</html>
