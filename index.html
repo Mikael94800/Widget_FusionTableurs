@@ -193,7 +193,6 @@
             color: var(--text-muted);
         }
 
-        /* Styles pour le rapport de doublons */
         #report-section {
             margin-top: 25px;
             border-top: 2px solid var(--border);
@@ -258,7 +257,7 @@
             <div class="tags-section">
                 <h3>Associer cet import à des Listes de Diffusion (optionnel)</h3>
                 <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 12px;">
-                    Cochez les listes ci-dessous pour les appliquer automatiquement à tous les contacts importés de ce fichier :
+                    Cochez les listes ci-dessous pour les lier automatiquement (référence multiple) à tous les contacts importés :
                 </p>
                 <div id="tags-container" class="tags-grid"></div>
             </div>
@@ -271,7 +270,6 @@
             </div>
         </div>
 
-        <!-- Section Rapport et Doublons -->
         <div id="report-section" class="hidden">
             <h3 id="report-title">Rapport d'importation</h3>
             <p id="report-summary" style="font-size: 0.95rem; font-weight: 500;"></p>
@@ -434,25 +432,32 @@
                 tagsContainer.innerHTML = '';
 
                 listColumns.forEach(group => {
-                    const uniqueValues = new Set();
+                    // On cherche les valeurs non vides pour cette colonne dans la table ETIQUETTES
+                    // et on mémorise leur id exact (id de la ligne dans ETIQUETTES)
+                    const uniqueTagsMap = new Map(); // Nom -> ID de la ligne
+
                     records.forEach(row => {
                         const val = row[group.col];
-                        if (val) {
+                        const rowId = row.id; // L'identifiant unique de la ligne dans ETIQUETTES
+
+                        if (val !== undefined && val !== null && val !== "") {
                             if (Array.isArray(val)) {
-                                val.forEach(v => { if(v) uniqueValues.add(v); });
+                                val.forEach(v => {
+                                    if (v) uniqueTagsMap.set(String(v), rowId);
+                                });
                             } else {
-                                uniqueValues.add(val);
+                                uniqueTagsMap.set(String(val), rowId);
                             }
                         }
                     });
 
-                    if (uniqueValues.size > 0) {
+                    if (uniqueTagsMap.size > 0) {
                         const groupTitle = document.createElement('div');
                         groupTitle.style.cssText = "grid-column: 1 / -1; font-weight: 600; font-size: 0.85rem; color: var(--text-muted); margin-top: 8px;";
                         groupTitle.innerText = `Catégorie : ${group.label}`;
                         tagsContainer.appendChild(groupTitle);
 
-                        uniqueValues.forEach(tagName => {
+                        uniqueTagsMap.forEach((rowId, tagName) => {
                             const label = document.createElement('label');
                             label.className = 'tag-checkbox-label';
 
@@ -460,7 +465,8 @@
                             checkbox.type = 'checkbox';
                             checkbox.name = 'diffusion_tag';
                             checkbox.dataset.column = group.col;
-                            checkbox.value = tagName;
+                            // On stocke l'ID technique de la ligne ETIQUETTES comme valeur
+                            checkbox.value = rowId;
 
                             label.appendChild(checkbox);
                             label.appendChild(document.createTextNode(' ' + tagName));
@@ -495,14 +501,17 @@
                 return;
             }
 
+            // Regrouper les IDs des étiquettes cochées par colonne cible
             const selectedTagsByColumn = {};
             document.querySelectorAll('input[name="diffusion_tag"]:checked').forEach(cb => {
                 const colName = cb.dataset.column;
                 if (!selectedTagsByColumn[colName]) {
                     selectedTagsByColumn[colName] = [];
                 }
-                const val = isNaN(cb.value) ? cb.value : parseInt(cb.value, 10);
-                selectedTagsByColumn[colName].push(val);
+                const tagId = parseInt(cb.value, 10);
+                if (!isNaN(tagId)) {
+                    selectedTagsByColumn[colName].push(tagId);
+                }
             });
 
             const btn = document.getElementById('btnImport');
@@ -510,17 +519,7 @@
             document.getElementById('status-msg').innerText = "Analyse des doublons et préparation...";
 
             try {
-                // Récupération des contacts existants avant l'import pour comparaison des doublons
                 const existingContacts = await grist.docApi.fetchTable('CONTACTS');
-
-                // Indexation des contacts existants pour recherche rapide (par email et nom)
-                const existingEmails = new Set();
-                const existingNames = new Set();
-                existingContacts.forEach(c => {
-                    if (c.EMAIL_PRINCIPAL) existingEmails.add(c.EMAIL_PRINCIPAL.toString().toLowerCase().trim());
-                    if (c.EMAILS_SECONDAIRES) existingEmails.add(c.EMAILS_SECONDAIRES.toString().toLowerCase().trim());
-                    if (c.NOM) existingNames.add(c.NOM.toString().toLowerCase().trim());
-                });
 
                 const multiRefColumns = [
                     "Listes_Diffusion_Intervenants",
@@ -558,11 +557,14 @@
                         }
                     }
 
-                    for (const [colName, tagValues] of Object.entries(selectedTagsByColumn)) {
-                        newRecord[colName] = ['L', ...tagValues];
+                    // Injection propre des listes de diffusion globales cochées (format Grist Référence multiple ['L', id1, id2, ...])
+                    for (const [colName, tagIds] of Object.entries(selectedTagsByColumn)) {
+                        if (tagIds.length > 0) {
+                            newRecord[colName] = ['L', ...tagIds];
+                        }
                     }
 
-                    // Détection de doublons (sur EMAIL_PRINCIPAL, EMAILS_SECONDAIRES ou NOM)
+                    // Détection des doublons sur EMAIL_PRINCIPAL, EMAILS_SECONDAIRES ou NOM
                     const emailP = newRecord.EMAIL_PRINCIPAL ? newRecord.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
                     const emailS = newRecord.EMAILS_SECONDAIRES ? newRecord.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
                     const nomContact = newRecord.NOM ? newRecord.NOM.toString().toLowerCase().trim() : "";
@@ -570,7 +572,6 @@
                     let matchFound = null;
                     let matchReason = "";
 
-                    // Recherche dans les contacts existants
                     for (const ec of existingContacts) {
                         const ecEmailP = ec.EMAIL_PRINCIPAL ? ec.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
                         const ecEmailS = ec.EMAILS_SECONDAIRES ? ec.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
@@ -614,7 +615,6 @@
                     ]);
                 }
 
-                // Masquer la section de mapping et afficher le rapport
                 document.getElementById('mapping-section').classList.add('hidden');
                 const reportSection = document.getElementById('report-section');
                 reportSection.classList.remove('hidden');
