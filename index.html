@@ -284,6 +284,7 @@
         let parsedData = [];
         let csvHeaders = [];
         let detectedDuplicates = [];
+        let actualEtiquettesTableName = "ETIQUETTES";
 
         grist.ready({
             requiredAccess: 'full'
@@ -386,7 +387,8 @@
                     opt.innerText = col;
 
                     const cleanCol = col.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
-                    if (cleanHeader === cleanCol || cleanHeader.includes(cleanCol) || cleanCol.includes(cleanHeader)) {
+                    // Correspondance exacte ou stricte pour éviter les faux positifs (ex: NOM vs PRENOM)
+                    if (cleanHeader === cleanCol) {
                         opt.selected = true;
                         matched = true;
                     }
@@ -428,17 +430,22 @@
             ];
 
             try {
-                const records = await grist.docApi.fetchTable('ETIQUETTES');
+                // Détection automatique du nom exact de la table des étiquettes (insensible à la casse)
+                const tables = await grist.docApi.listTables();
+                const foundTable = tables.find(t => t.toLowerCase() === 'etiquettes');
+                if (foundTable) {
+                    actualEtiquettesTableName = foundTable;
+                }
+
+                const records = await grist.docApi.fetchTable(actualEtiquettesTableName);
                 tagsContainer.innerHTML = '';
 
                 listColumns.forEach(group => {
-                    // On cherche les valeurs non vides pour cette colonne dans la table ETIQUETTES
-                    // et on mémorise leur id exact (id de la ligne dans ETIQUETTES)
-                    const uniqueTagsMap = new Map(); // Nom -> ID de la ligne
+                    const uniqueTagsMap = new Map();
 
                     records.forEach(row => {
                         const val = row[group.col];
-                        const rowId = row.id; // L'identifiant unique de la ligne dans ETIQUETTES
+                        const rowId = row.id;
 
                         if (val !== undefined && val !== null && val !== "") {
                             if (Array.isArray(val)) {
@@ -465,7 +472,6 @@
                             checkbox.type = 'checkbox';
                             checkbox.name = 'diffusion_tag';
                             checkbox.dataset.column = group.col;
-                            // On stocke l'ID technique de la ligne ETIQUETTES comme valeur
                             checkbox.value = rowId;
 
                             label.appendChild(checkbox);
@@ -476,11 +482,11 @@
                 });
 
                 if (tagsContainer.children.length === 0) {
-                    tagsContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">Aucune liste trouvée dans ETIQUETTES.</span>';
+                    tagsContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">Aucune liste trouvée dans la table des étiquettes.</span>';
                 }
             } catch (err) {
-                console.error("Erreur de chargement ETIQUETTES :", err);
-                tagsContainer.innerHTML = '<span style="color: var(--error-border); font-size: 0.85rem;">Erreur de chargement des étiquettes.</span>';
+                console.error("Erreur de chargement des étiquettes :", err);
+                tagsContainer.innerHTML = `<span style="color: var(--error-border); font-size: 0.85rem;">Erreur : ${err.message || "Impossible de lire la table des étiquettes"}</span>`;
             }
         }
 
@@ -501,7 +507,6 @@
                 return;
             }
 
-            // Regrouper les IDs des étiquettes cochées par colonne cible
             const selectedTagsByColumn = {};
             document.querySelectorAll('input[name="diffusion_tag"]:checked').forEach(cb => {
                 const colName = cb.dataset.column;
@@ -557,14 +562,12 @@
                         }
                     }
 
-                    // Injection propre des listes de diffusion globales cochées (format Grist Référence multiple ['L', id1, id2, ...])
                     for (const [colName, tagIds] of Object.entries(selectedTagsByColumn)) {
                         if (tagIds.length > 0) {
                             newRecord[colName] = ['L', ...tagIds];
                         }
                     }
 
-                    // Détection des doublons sur EMAIL_PRINCIPAL, EMAILS_SECONDAIRES ou NOM
                     const emailP = newRecord.EMAIL_PRINCIPAL ? newRecord.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
                     const emailS = newRecord.EMAILS_SECONDAIRES ? newRecord.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
                     const nomContact = newRecord.NOM ? newRecord.NOM.toString().toLowerCase().trim() : "";
