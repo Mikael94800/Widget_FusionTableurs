@@ -192,7 +192,7 @@
             requiredAccess: 'full'
         });
 
-        // Récupération intelligente des colonnes de la table active via Grist
+        // Récupération dynamique des colonnes de la table active
         grist.onRecord(function(record, mappings) {
             if (record) {
                 gristColumns = Object.keys(record);
@@ -256,15 +256,18 @@
             const container = document.getElementById('mapping-container');
             container.innerHTML = '';
 
-            // Si gristColumns est vide, on prend un ensemble étendu de champs standards fréquents dans Contacts
-            const defaultColumns = [
-                "NOM", "PRENOM", "EMAIL", "TELEPHONE", "TELEPHONES_SECONDAIRES", 
-                "ADRESSE", "VILLE", "CODE_POSTAL", "ENTREPRISE", "COMMENTAIRE", 
-                "EMAIL_PRINCIPAL", "Telephone_Principal", "CONTACT_ID"
+            // Vos colonnes officielles exactes de la table IMPORT_CONTACTS / CONTACTS
+            const officialColumns = [
+                "Cree_Par", "Date_Saisie", "Service", "DOMAINE D'ACTIVITES", 
+                "Commentaire / Description", "STATUT JURIDIQUE", "TYPE_DE_STRUCTURE", 
+                "NOM_Structure", "NOM", "PRENOM", "EMAIL PRINCIPAL", "EMAILS SECONDAIRES", 
+                "Téléphone Principal", "Téléphones Secondaires", "Fonction / Profession", 
+                "Code Postal", "Ville", "Adresse", "Pays", 
+                "Listes_Diffusion_Intervention", "Listes_Diffusion_Cinema", 
+                "Listes_Diffusion_Direction", "Listes_Diffusion_Houdremont"
             ];
             
-            // On fusionne les colonnes détectées de la table Grist et les valeurs de secours sans doublons
-            let availableCols = [...new Set([...gristColumns, ...defaultColumns])].filter(Boolean);
+            let availableCols = [...new Set([...gristColumns, ...officialColumns])].filter(Boolean);
 
             csvHeaders.forEach(header => {
                 const card = document.createElement('div');
