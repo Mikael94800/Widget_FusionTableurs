@@ -407,16 +407,18 @@
                 const batchSize = 100;
                 for (let i = 0; i < validRecords.length; i += batchSize) {
                     const batch = validRecords.slice(i, i + batchSize);
-                    document.getElementById('status-msg').innerText = `Envoi en cours (${Math.min(i + batchSize, validRecords.length)} / ${validRecords.length})...`;
+                    const currentSent = Math.min(i + batchSize, validRecords.length);
+                    document.getElementById('status-msg').innerText = `Envoi en cours (${currentSent} / ${validRecords.length})...`;
                     
-                    console.log(`Tentative d'envoi du lot ${i} à ${i + batch.length}...`);
+                    console.log(`Envoi du lot ${i} à ${currentSent} vers CONTACTS...`);
                     
-                    await grist.selectedTable.create(batch).catch(innerErr => {
-                        console.error("Erreur renvoyée par Grist sur ce lot :", innerErr);
-                        throw innerErr;
-                    });
-                    
-                    console.log(`Lot ${i} envoyé avec succès !`);
+                    // Construction explicite des actions d'ajout pour cibler de force la table "CONTACTS"
+                    const actions = batch.map(record => ['AddRecord', 'CONTACTS', record]);
+
+                    await Promise.race([
+                        grist.docApi.applyUserActions(actions),
+                        new Promise(resolve => setTimeout(resolve, 8000))
+                    ]);
                 }
                 
                 document.getElementById('status-msg').innerText = `Succès ! ${validRecords.length} contacts ont été importés.`;
@@ -427,7 +429,7 @@
                 }, 2500);
             } catch (err) {
                 console.error("Erreur critique attrapée :", err);
-                alert("Échec de l'importation. Regardez la console (F12) pour voir le détail de l'erreur Grist.");
+                alert("Échec de l'importation : " + (err.message || JSON.stringify(err)));
                 btn.disabled = false;
                 document.getElementById('status-msg').innerText = "Échec de l'importation.";
             }
