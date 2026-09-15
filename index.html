@@ -19,13 +19,34 @@ async function executeImport() {
     btn.disabled = true;
     document.getElementById('status-msg').innerText = "Préparation des données...";
 
+    // Liste des colonnes de type "Référence multiple" nécessitant le format Grist ['L', id1, id2, ...]
+    const multiRefColumns = [
+        "Listes_Diffusion_Intervenants",
+        "Listes_Diffusion_Cinema",
+        "Listes_Diffusion_Direction",
+        "Listes_Diffusion_Houdremont"
+    ];
+
     const recordsToInsert = parsedData.map(row => {
         const newRecord = {};
         for (const [origKey, targetKey] of Object.entries(mapping)) {
-            if (row[origKey] !== undefined && row[origKey] !== "") {
-                // Nettoyage de la clé cible pour correspondre aux standards Grist (minuscules, sans accents ni espaces si besoin, ou conservation stricte)
-                // On garde la valeur telle quelle mais on s'assure qu'il n'y a pas de valeurs vides
-                newRecord[targetKey] = row[origKey];
+            let val = row[origKey];
+            if (val !== undefined && val !== "") {
+                // Gestion spécifique pour formater correctement les listes de diffusion (Références multiples)
+                if (multiRefColumns.includes(targetKey)) {
+                    if (typeof val === 'string') {
+                        // Sépare par des virgules ou points-virgules et convertit en nombres entiers
+                        const ids = val.split(/[,;]/).map(v => parseInt(v.trim(), 10)).filter(n => !isNaN(n));
+                        newRecord[targetKey] = ['L', ...ids];
+                    } else if (Array.isArray(val)) {
+                        const ids = val.map(v => parseInt(v, 10)).filter(n => !isNaN(n));
+                        newRecord[targetKey] = ['L', ...ids];
+                    } else {
+                        newRecord[targetKey] = val;
+                    }
+                } else {
+                    newRecord[targetKey] = val;
+                }
             }
         }
         return newRecord;
