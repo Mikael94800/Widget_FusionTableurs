@@ -256,7 +256,6 @@
             const container = document.getElementById('mapping-container');
             container.innerHTML = '';
 
-            // Vos colonnes officielles exactes de la table IMPORT_CONTACTS / CONTACTS
             const officialColumns = [
                 "Cree_Par", "Date_Saisie", "Service", "DOMAINE D'ACTIVITES", 
                 "Commentaire / Description", "STATUT JURIDIQUE", "TYPE_DE_STRUCTURE", 
@@ -287,7 +286,6 @@
                 const select = document.createElement('select');
                 select.className = 'mapping-select';
 
-                // Option vide par défaut
                 const defaultOpt = document.createElement('option');
                 defaultOpt.value = "";
                 defaultOpt.innerText = "-- Ignorer / Non assigné --";
@@ -301,7 +299,6 @@
                     opt.value = col;
                     opt.innerText = col;
 
-                    // Correspondance intelligente automatique
                     const cleanCol = col.toLowerCase().replace(/[^a-z0-9]/g, '');
                     if (cleanHeader === cleanCol || cleanHeader.includes(cleanCol) || cleanCol.includes(cleanHeader)) {
                         opt.selected = true;
@@ -363,27 +360,34 @@
             });
 
             console.log(`Total de lignes à importer : ${recordsToInsert.length}`);
+            console.log("Exemple du premier enregistrement formaté :", recordsToInsert[0]);
 
             try {
-                const batchSize = 500; // Envoi par paquets de 500 lignes
+                const batchSize = 100; // Réduit à 100 pour isoler plus facilement
                 for (let i = 0; i < recordsToInsert.length; i += batchSize) {
                     const batch = recordsToInsert.slice(i, i + batchSize);
                     document.getElementById('status-msg').innerText = `Envoi en cours (${Math.min(i + batchSize, recordsToInsert.length)} / ${recordsToInsert.length})...`;
                     
-                    console.log(`Envoi du lot ${i} à ${i + batch.length}...`);
-                    await grist.selectedTable.create(batch);
+                    console.log(`Tentative d'envoi du lot ${i} à ${i + batch.length}...`);
+                    
+                    // Appel protégé avec capture explicite de l'erreur
+                    await grist.selectedTable.create(batch).catch(innerErr => {
+                        console.error("Erreur renvoyée par Grist sur ce lot :", innerErr);
+                        throw innerErr;
+                    });
+                    
+                    console.log(`Lot ${i} envoyé avec succès !`);
                 }
                 
                 document.getElementById('status-msg').innerText = `Succès ! ${recordsToInsert.length} contacts ont été importés.`;
                 document.getElementById('status-msg').style.color = "var(--success)";
-                console.log("Importation terminée avec succès !");
                 
                 setTimeout(() => {
                     location.reload();
                 }, 2500);
             } catch (err) {
-                console.error("Erreur détaillée Grist :", err);
-                alert("Erreur lors de l'enregistrement dans Grist : " + (err.message || JSON.stringify(err)));
+                console.error("Erreur critique attrapée :", err);
+                alert("Échec de l'importation. Regardez la console (F12) pour voir le détail de l'erreur Grist.");
                 btn.disabled = false;
                 document.getElementById('status-msg').innerText = "Échec de l'importation.";
             }
