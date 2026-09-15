@@ -381,10 +381,13 @@
                     const currentSent = Math.min(i + batchSize, validRecords.length);
                     document.getElementById('status-msg').innerText = `Envoi en cours (${currentSent} / ${validRecords.length})...`;
                     
-                    console.log(`Envoi du lot ${i} à ${currentSent}...`);
+                    console.log(`Envoi du lot ${i} à ${currentSent} vers CONTACTS...`);
                     
+                    // Utilisation de l'API Document pour cibler de force la table CONTACTS explicitement
+                    const actions = batch.map(record => ['AddRecord', 'CONTACTS', null, record]);
+
                     await Promise.race([
-                        grist.selectedTable.create(batch),
+                        grist.docApi.applyUserActions(actions),
                         new Promise(resolve => setTimeout(resolve, 8000))
                     ]);
                 }
