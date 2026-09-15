@@ -44,6 +44,13 @@
             margin-bottom: 20px;
         }
 
+        h3 {
+            font-size: 1.1rem;
+            color: var(--text-main);
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
         .drop-zone {
             border: 2px dashed var(--border);
             border-radius: 8px;
@@ -89,7 +96,7 @@
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 16px;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
 
         .mapping-card {
@@ -127,6 +134,41 @@
             border-radius: 4px;
             background: white;
             font-size: 0.95rem;
+        }
+
+        .tags-section {
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+
+        .tags-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+
+        .tag-checkbox-label {
+            display: flex;
+            align-items: center;
+            font-size: 0.9rem;
+            cursor: pointer;
+            background: white;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            transition: background 0.1s;
+        }
+
+        .tag-checkbox-label:hover {
+            background: #f0fdf4;
+        }
+
+        .tag-checkbox-label input {
+            margin-right: 8px;
+            accent-color: var(--primary);
         }
 
         .hidden {
@@ -167,6 +209,16 @@
             </p>
             
             <div id="mapping-container"></div>
+
+            <div class="tags-section">
+                <h3>Associer cet import à des Listes de Diffusion (optionnel)</h3>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 12px;">
+                    Cochez les listes ci-dessous pour les appliquer automatiquement à tous les contacts importés de ce fichier :
+                </p>
+                <div id="tags-container" class="tags-grid">
+                    <!-- Rempli dynamiquement -->
+                </div>
+            </div>
 
             <div style="display: flex; align-items: center; justify-content: space-between;">
                 <button id="btnImport" class="btn" onclick="executeImport()">Lancer l'intégration</button>
@@ -234,7 +286,7 @@
             });
         }
 
-        function showMappingInterface() {
+        async function showMappingInterface() {
             document.getElementById('upload-section').classList.add('hidden');
             document.getElementById('mapping-section').classList.remove('hidden');
 
@@ -308,6 +360,72 @@
                 card.appendChild(select);
                 container.appendChild(card);
             });
+
+            // Charger les listes de diffusion existantes depuis la table ETIQUETTES via fetchTable
+            loadDiffusionTags();
+        }
+
+        async function loadDiffusionTags() {
+            const tagsContainer = document.getElementById('tags-container');
+            tagsContainer.innerHTML = 'Chargement des listes...';
+
+            const listColumns = [
+                { col: "Listes_Diffusion_Intervenants", label: "Intervenants" },
+                { col: "Listes_Diffusion_Cinema", label: "Cinéma" },
+                { col: "Listes_Diffusion_Direction", label: "Direction" },
+                { col: "Listes_Diffusion_Houdremont", label: "Houdremont" }
+            ];
+
+            try {
+                // Récupération des lignes de la table ETIQUETTES
+                const records = await grist.docApi.fetchTable('ETIQUETTES');
+                tagsContainer.innerHTML = '';
+
+                listColumns.forEach(group => {
+                    // Extraire toutes les valeurs uniques non vides pour cette colonne de la table ETIQUETTES
+                    const uniqueValues = new Set();
+                    records.forEach(row => {
+                        const val = row[group.col];
+                        if (val) {
+                            if (Array.isArray(val)) {
+                                val.forEach(v => { if(v) uniqueValues.add(v); });
+                            } else {
+                                uniqueValues.add(val);
+                            }
+                        }
+                    });
+
+                    if (uniqueValues.size > 0) {
+                        const groupTitle = document.createElement('div');
+                        groupTitle.style.cssText = "grid-column: 1 / -1; font-weight: 600; font-size: 0.85rem; color: var(--text-muted); margin-top: 8px;";
+                        groupTitle.innerText = `Catégorie : ${group.label}`;
+                        tagsContainer.appendChild(groupTitle);
+
+                        uniqueValues.forEach(tagName => {
+                            const label = document.createElement('label');
+                            label.className = 'tag-checkbox-label';
+
+                            const checkbox = document.createElement('input');
+                            checkbox.type = 'checkbox';
+                            checkbox.name = 'diffusion_tag';
+                            checkbox.dataset.column = group.col;
+                            // On stocke le nom ou l'ID de l'étiquette selon ce que renvoie Grist
+                            checkbox.value = tagName;
+
+                            label.appendChild(checkbox);
+                            label.appendChild(document.createTextNode(' ' + tagName));
+                            tagsContainer.appendChild(label);
+                        });
+                    }
+                });
+
+                if (tagsContainer.children.length === 0) {
+                    tagsContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">Aucune liste trouvée dans ETIQUETTES.</span>';
+                }
+            } catch (err) {
+                console.error("Impossible de charger la table ETIQUETTES :", err);
+                tagsContainer.innerHTML = '<span style="color: var(--error-border); font-size: 0.85rem;">Erreur de chargement des étiquettes.</span>';
+            }
         }
 
         async function executeImport() {
@@ -327,6 +445,18 @@
                 return;
             }
 
+            // Récupérer les listes de diffusion cochées
+            const selectedTagsByColumn = {};
+            document.querySelectorAll('input[name="diffusion_tag"]:checked').forEach(cb => {
+                const colName = cb.dataset.column;
+                if (!selectedTagsByColumn[colName]) {
+                    selectedTagsByColumn[colName] = [];
+                }
+                // Si la valeur est un nombre (ID de référence), on le parse en int, sinon texte
+                const val = isNaN(cb.value) ? cb.value : parseInt(cb.value, 10);
+                selectedTagsByColumn[colName].push(val);
+            });
+
             const btn = document.getElementById('btnImport');
             btn.disabled = true;
             document.getElementById('status-msg').innerText = "Préparation des données...";
@@ -338,9 +468,8 @@
                 "Listes_Diffusion_Houdremont"
             ];
 
-            // Table de correspondance exacte pour sécuriser les noms de colonnes sensibles
             const columnCorrections = {
-                "Téléphone_Principal": "Telephone_Principal", // Ajustez ici si votre table s'appelle Telephone sans accent
+                "Téléphone_Principal": "Telephone_Principal",
                 "Téléphones_Secondaires": "Telephones_Secondaires"
             };
 
@@ -348,7 +477,6 @@
                 const newRecord = {};
                 for (const [origKey, targetKey] of Object.entries(mapping)) {
                     let val = row[origKey];
-                    // Correction automatique de la clé si elle diffère dans Grist
                     const finalKey = columnCorrections[targetKey] || targetKey;
 
                     if (val !== undefined && val !== "") {
@@ -367,6 +495,13 @@
                         }
                     }
                 }
+
+                // Injecter les listes de diffusion globales cochées pour chaque contact importé
+                for (const [colName, tagValues] of Object.entries(selectedTagsByColumn)) {
+                    // Format de référence multiple Grist : ['L', id1, id2, ...] ou liste de valeurs
+                    newRecord[colName] = ['L', ...tagValues];
+                }
+
                 return newRecord;
             });
 
