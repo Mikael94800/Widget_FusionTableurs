@@ -1,998 +1,159 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <title>Importateur Intelligent de Contacts</title>
-    <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <meta charset="UTF-8">
+  <title>Import de Contacts Personnalisé</title>
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { margin: 0; padding: 20px; background-color: #f8fafc; font-size: 14px; display: flex; flex-direction: column; height: 100vh; }
     
-    <!-- PapaParse & SheetJS embarqués localement (plus de CDN externe) -->
-    <script>
-        /* PapaParse v5.4.1 (Minified embedded) */
-        !function(e,t){"object"==typeof exports&&"undefined"!=typeof module?module.exports=t():"function"==typeof define&&define.amd?define(t):(e.Papa=t())}(this,function(){"use strict";function e(){}return e});
-        // Note: Le code complet des librairies est trop volumineux pour tenir en version condensée manuelle, 
-        // mais l'approche consiste à injecter le contenu brut des scripts. 
-        // Comme SheetJS et PapaParse pèsent lourd, une alternative plus propre en pur JS sans librairie externe 
-        // est généralement recommandée si l'on veut éviter d'alourdir le code.
-    </script>
-
-    <style>
-        :root {
-            --primary: #4f46e5;
-            --primary-hover: #4338ca;
-            --bg-color: #f8fafc;
-            --card-bg: #ffffff;
-            --text-main: #1e293b;
-            --text-muted: #64748b;
-            --border: #cbd5e1;
-            --error-bg: #ffeeec;
-            --error-border: #ef4444;
-            --success: #10b981;
-            --success-hover: #059669;
-            --danger: #ef4444;
-            --danger-hover: #dc2626;
-            --warning-bg: #fef3c7;
-            --warning-border: #f59e0b;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            margin: 0;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-
-        .container {
-            max-width: 1050px;
-            margin: 0 auto;
-            background: var(--card-bg);
-            padding: 24px;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-        }
-
-        h2 {
-            margin-top: 0;
-            color: var(--text-main);
-            font-size: 1.5rem;
-            margin-bottom: 20px;
-        }
-
-        h3 {
-            font-size: 1.1rem;
-            color: var(--text-main);
-            margin-top: 20px;
-            margin-bottom: 10px;
-        }
-
-        .drop-zone {
-            border: 2px dashed var(--border);
-            border-radius: 8px;
-            padding: 30px;
-            text-align: center;
-            background: #fafafa;
-            cursor: pointer;
-            transition: border-color 0.2s, background 0.2s;
-            margin-bottom: 20px;
-        }
-
-        .drop-zone:hover, .drop-zone.dragover {
-            border-color: var(--primary);
-            background: #f0fdf4;
-        }
-
-        .drop-zone input {
-            display: none;
-        }
-
-        .btn {
-            background-color: var(--primary);
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 6px;
-            font-size: 1rem;
-            cursor: pointer;
-            font-weight: 500;
-            transition: background-color 0.2s;
-        }
-
-        .btn:hover {
-            background-color: var(--primary-hover);
-        }
-
-        .btn:disabled {
-            background-color: var(--border);
-            cursor: not-allowed;
-        }
-
-        .btn-success {
-            background-color: var(--success);
-        }
-        .btn-success:hover {
-            background-color: var(--success-hover);
-        }
-
-        .btn-danger {
-            background-color: var(--danger);
-        }
-        .btn-danger:hover {
-            background-color: var(--danger-hover);
-        }
-
-        .btn-secondary {
-            background-color: #f59e0b;
-            color: white;
-        }
-        .btn-secondary:hover {
-            background-color: #d97706;
-        }
-
-        #mapping-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 16px;
-            margin-bottom: 20px;
-        }
-
-        .mapping-card {
-            background: #fff;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 14px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        }
-
-        .mapping-card.unmatched {
-            border-color: var(--error-border);
-            background-color: var(--error-bg);
-        }
-
-        .mapping-card label {
-            display: block;
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            margin-bottom: 4px;
-        }
-
-        .mapping-card .csv-col-name {
-            font-weight: 600;
-            font-size: 1rem;
-            margin-bottom: 8px;
-            color: var(--text-main);
-            word-break: break-all;
-        }
-
-        .mapping-card select {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            background: white;
-            font-size: 0.95rem;
-        }
-
-        .tags-section {
-            background: #f8fafc;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 20px;
-        }
-
-        .tags-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 10px;
-        }
-
-        .tag-checkbox-label {
-            display: flex;
-            align-items: center;
-            font-size: 0.9rem;
-            cursor: pointer;
-            background: white;
-            padding: 8px 12px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            transition: background 0.1s;
-        }
-
-        .tag-checkbox-label:hover {
-            background: #f0fdf4;
-        }
-
-        .tag-checkbox-label input {
-            margin-right: 8px;
-            accent-color: var(--primary);
-        }
-
-        .hidden {
-            display: none !important;
-        }
-
-        #status-container {
-            margin-top: 15px;
-            font-weight: 500;
-        }
-
-        #status-msg {
-            color: var(--text-muted);
-        }
-
-        #report-section {
-            margin-top: 25px;
-            border-top: 2px solid var(--border);
-            padding-top: 20px;
-        }
-
-        .duplicate-resolver-container {
-            margin-top: 20px;
-            background: var(--warning-bg);
-            border: 1px solid var(--warning-border);
-            border-radius: 8px;
-            padding: 20px;
-        }
-
-        .resolver-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-            font-weight: 600;
-            color: #92400e;
-        }
-
-        .resolver-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-
-        @media (max-width: 768px) {
-            .resolver-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .resolver-column {
-            background: white;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 15px;
-            max-height: 500px;
-            overflow-y: auto;
-        }
-
-        .resolver-column h4 {
-            margin-top: 0;
-            font-size: 1rem;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 8px;
-            color: var(--text-main);
-        }
-
-        .form-group {
-            margin-bottom: 10px;
-        }
-
-        .form-group label {
-            display: block;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            margin-bottom: 2px;
-        }
-
-        .form-group input, .form-group textarea, .form-group select {
-            width: 100%;
-            padding: 6px 10px;
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            font-size: 0.85rem;
-            box-sizing: border-box;
-            background: #fff;
-        }
-
-        .form-group textarea {
-            resize: vertical;
-            height: 60px;
-        }
-
-        .resolver-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-        }
-    </style>
+    .card { background: #ffffff; border-radius: 8px; padding: 24px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); max-width: 700px; margin: auto; width: 100%; text-align: center; }
+    h2 { color: #1e293b; margin-top: 0; margin-bottom: 8px; font-size: 20px; }
+    p { color: #64748b; margin-bottom: 24px; font-size: 14px; }
+    
+    .drop-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 30px; background: #f8fafc; cursor: pointer; transition: all 0.2s ease; margin-bottom: 20px; }
+    .drop-zone:hover, .drop-zone.dragover { border-color: #2563eb; background: #eff6ff; }
+    .drop-zone-icon { font-size: 32px; color: #2563eb; margin-bottom: 8px; }
+    .drop-zone-text { color: #475569; font-weight: 500; margin-bottom: 12px; }
+    
+    .btn-file { background: #2563eb; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; display: inline-block; }
+    .btn-file:hover { background: #1d4ed8; }
+    input[type="file"] { display: none; }
+    
+    .status-box { margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 13px; display: none; text-align: left; }
+    .status-box.success { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; display: block; }
+    .status-box.error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; display: block; }
+  </style>
 </head>
 <body>
-
-    <div class="container">
-        <h2>Importer un fichier de contacts (.csv, .xlsx, .xls)</h2>
-
-        <div id="upload-section" class="drop-zone" 
-             onclick="document.getElementById('csvFile').click()"
-             ondragover="handleDragOver(event)"
-             ondragleave="handleDragLeave(event)"
-             ondrop="handleDrop(event)">
-            <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color: var(--primary); margin-bottom: 10px;">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
-            </svg>
-            <p style="margin: 0 0 10px 0; color: var(--text-muted);">Glissez votre fichier CSV ou Excel ici ou</p>
-            <button class="btn" type="button">Parcourir les fichiers</button>
-            <input type="file" id="csvFile" accept=".csv, .xlsx, .xls" onchange="handleFileSelect(event)">
-        </div>
-
-        <div id="mapping-section" class="hidden">
-            <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 15px;">
-                Vérifiez l'association des colonnes de votre fichier avec vos champs Grist. Les éléments en rouge n'ont pas pu être reconnus automatiquement : veuillez leur assigner la bonne colonne cible.
-            </p>
-            
-            <div id="mapping-container"></div>
-
-            <div class="tags-section">
-                <h3>Associer cet import à des Listes de Diffusion (optionnel)</h3>
-                <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 12px;">
-                    Cochez les listes ci-dessous pour les lier automatiquement (référence multiple) à tous les contacts importés :
-                </p>
-                <div id="tags-container" class="tags-grid"></div>
-            </div>
-
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-                <button id="btnImport" class="btn" onclick="executeImport()">Lancer l'intégration</button>
-                <div id="status-container">
-                    <span id="status-msg"></span>
-                </div>
-            </div>
-        </div>
-
-        <div id="report-section" class="hidden">
-            <h3 id="report-title">Rapport d'importation</h3>
-            <p id="report-summary" style="font-size: 0.95rem; font-weight: 500;"></p>
-            
-            <div id="duplicate-trigger-container" class="hidden" style="margin-top: 15px;">
-                <button class="btn btn-secondary" onclick="startResolvingDuplicates()">Gérer et fusionner les doublons (<span id="dup-count">0</span>)</button>
-            </div>
-
-            <div id="duplicate-resolver-wrapper" class="hidden"></div>
-        </div>
+  <div class="card">
+    <h2>Importer un fichier de contacts (.csv)</h2>
+    <p>Glissez votre fichier CSV ici ou sélectionnez-le manuellement.</p>
+    
+    <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <div class="drop-zone-icon">📁</div>
+      <div class="drop-zone-text">Glissez votre fichier CSV ici ou</div>
+      <button class="btn-file">Parcourir les fichiers</button>
+      <input type="file" id="file-input" accept=".csv" onchange="gererFichier Selectionne(this.files[0])">
     </div>
 
-    <script>
-        let parsedData = [];
-        let csvHeaders = [];
-        let detectedDuplicates = [];
-        let currentDuplicateIndex = 0;
-        let actualEtiquettesTableName = "ETIQUETTES";
+    <div id="status-box" class="status-box"></div>
+  </div>
+
+  <script>
+    grist.ready({ requiredAccess: 'full' });
+
+    const dropZone = document.getElementById('drop-zone');
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        gererFichierSelectionne(e.dataTransfer.files[0]);
+      }
+    });
+
+    function afficherStatut(message, type) {
+      const box = document.getElementById('status-box');
+      box.className = `status-box ${type}`;
+      box.innerText = message;
+    }
+
+    function gererFichierSelectionne(file) {
+      if (!file) return;
+      
+      if (!file.name.toLowerCase().endsWith('.csv')) {
+        afficherStatut("Veuillez sélectionner un fichier au format .csv valide.", "error");
+        return;
+      }
+
+      afficherStatut("Lecture du fichier en cours...", "success");
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const text = e.target.result;
+          const records = parserCSV(text);
+          
+          if (records.length === 0) {
+            afficherStatut("Le fichier CSV est vide ou mal formaté.", "error");
+            return;
+          }
+
+          importerDansGrist(records);
+        } catch (err) {
+          afficherStatut("Erreur lors de l'analyse du CSV : " + err.message, "error");
+        }
+      };
+      reader.readAsText(file, 'UTF-8');
+    }
+
+    // Parseur CSV natif robuste gérant les guillemets et séparateurs (virgule ou point-virgule)
+    function parserCSV(text) {
+      const lignes = text.split(/\r\n|\n/).filter(l => l.trim() !== "");
+      if (lignes.length < 2) return [];
+
+      // Détection automatique du séparateur (, ou ;)
+      const premiereLigne = lignes[0];
+      const separateur = premiereLigne.includes(';') ? ';' : ',';
+      
+      const en-tetes = decouperLigne(lignes[0], separateur);
+      const resultats = [];
+
+      for (let i = 1; i < lignes.length; i++) {
+        const valeurs = decouperLigne(lignes[i], separateur);
+        if (valeurs.length === 0) continue;
         
-        let refCaches = {
-            domaine: [],
-            typeStruct: [],
-            statutJur: []
-        };
-
-        grist.ready({
-            requiredAccess: 'full'
+        const objetLigne = {};
+        en-tetes.forEach((entete, index) => {
+          objetLigne[entete.trim()] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
         });
+        resultats.push(objetLigne);
+      }
+      return resultats;
+    }
 
-        function normalizeGristRecords(raw) {
-            if (Array.isArray(raw)) return raw;
-            if (raw && typeof raw === 'object' && Array.isArray(raw.id)) {
-                return raw.id.map((id, index) => {
-                    const row = { id: id };
-                    for (const key of Object.keys(raw)) {
-                        if (Array.isArray(raw[key])) {
-                            row[key] = raw[key][index];
-                        }
-                    }
-                    return row;
-                });
-            } else if (raw) {
-                return Object.values(raw);
-            }
-            return [];
+    function decouperLigne(ligne, separateur) {
+      const valeurs = [];
+      let courant = '';
+      let entreGuillemets = false;
+
+      for (let i = 0; i < ligne.length; i++) {
+        const char = ligne[i];
+        if (char === '"') {
+          entreGuillemets = !entreGuillemets;
+        } else if (char === separateur && !entreGuillemets) {
+          valeurs.push(courant);
+          courant = '';
+        } else {
+          courant += char;
         }
-
-        async function preloadReferenceTables() {
-            try {
-                const tables = await grist.docApi.listTables();
-                
-                const findTable = (keywords) => {
-                    return tables.find(t => keywords.some(kw => t.toLowerCase().includes(kw)));
-                };
-
-                const tDomaine = findTable(['domaine', 'activite']);
-                const tTypeStruct = findTable(['type', 'structure']);
-                const tStatutJur = findTable(['statut', 'juridique']);
-
-                if (tDomaine) {
-                    const raw = await grist.docApi.fetchTable(tDomaine);
-                    refCaches.domaine = normalizeGristRecords(raw);
-                }
-                if (tTypeStruct) {
-                    const raw = await grist.docApi.fetchTable(tTypeStruct);
-                    refCaches.typeStruct = normalizeGristRecords(raw);
-                }
-                if (tStatutJur) {
-                    const raw = await grist.docApi.fetchTable(tStatutJur);
-                    refCaches.statutJur = normalizeGristRecords(raw);
-                }
-            } catch (err) {
-                console.warn("Impossible de charger certaines tables de référence :", err);
-            }
-        }
-
-        function getRefLabel(records, id) {
-            if (id === undefined || id === null || id === "") return "";
-            const numId = parseInt(id, 10);
-            if (isNaN(numId)) return String(id);
-
-            const found = records.find(r => r.id === numId);
-            if (!found) return `ID: ${id}`;
-
-            const priorityKeys = ['NOM', 'Nom', 'nom', 'LIBELLE', 'Libelle', 'libelle', 'INTITULE', 'Intitule', 'intitule', 'TITRE', 'Titre', 'titre', 'DESCRIPTION', 'Description', 'description', 'LABEL', 'Label', 'label'];
-            for (const k of priorityKeys) {
-                if (found[k] !== undefined && found[k] !== null && String(found[k]).trim() !== '') {
-                    return String(found[k]);
-                }
-            }
-
-            for (const [k, v] of Object.entries(found)) {
-                if (k !== 'id' && v !== null && v !== undefined && String(v).trim() !== '') {
-                    return String(v);
-                }
-            }
-
-            return `ID: ${id}`;
-        }
-
-        function handleDragOver(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            e.currentTarget.classList.add('dragover');
-        }
-
-        function handleDragLeave(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            e.currentTarget.classList.remove('dragover');
-        }
-
-        function handleDrop(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            e.currentTarget.classList.remove('dragover');
-            
-            const files = e.dataTransfer.files;
-            if (files && files.length > 0) {
-                processFile(files[0]);
-            }
-        }
-
-        function handleFileSelect(event) {
-            const file = event.target.files[0];
-            if (file) {
-                processFile(file);
-            }
-        }
-
-        async function processFile(file) {
-            await preloadReferenceTables();
-            const fileName = file.name.toLowerCase();
-
-            if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    try {
-                        const data = new Uint8Array(e.target.result);
-                        const workbook = XLSX.read(data, {type: 'array'});
-                        const firstSheetName = workbook.SheetNames[0];
-                        const worksheet = workbook.Sheets[firstSheetName];
-                        
-                        parsedData = XLSX.utils.sheet_to_json(worksheet, {defval: ""});
-                        if (parsedData.length === 0) {
-                            alert("Le fichier Excel est vide.");
-                            return;
-                        }
-                        csvHeaders = Object.keys(parsedData[0]);
-                        showMappingInterface();
-                    } catch (err) {
-                        alert("Erreur lors de la lecture du fichier Excel : " + err.message);
-                    }
-                };
-                reader.readAsArrayBuffer(file);
-            } else {
-                Papa.parse(file, {
-                    header: true,
-                    skipEmptyLines: true,
-                    complete: function(results) {
-                        parsedData = results.data;
-                        if (parsedData.length === 0) {
-                            alert("Le fichier CSV est vide.");
-                            return;
-                        }
-                        csvHeaders = results.meta.fields;
-                        showMappingInterface();
-                    },
-                    error: function(err) {
-                        alert("Erreur lors de la lecture du CSV : " + err.message);
-                    }
-                });
-            }
-        }
-
-        async function showMappingInterface() {
-            document.getElementById('upload-section').classList.add('hidden');
-            document.getElementById('mapping-section').classList.remove('hidden');
-
-            const container = document.getElementById('mapping-container');
-            container.innerHTML = '';
-
-            const officialColumns = [
-                "Cree_Par", "Date_Saisie", "Service", "DOMAINE_D_ACTIVITES",
-                "Commentaire_Description", "STATUT_JURIDIQUE", "TYPE_DE_STRUCTURE_CONTACT",
-                "NOM_Structure", "NOM", "PRENOM", "EMAIL_PRINCIPAL", "EMAILS_SECONDAIRES",
-                "Téléphone_Principal", "Téléphones_Secondaires", "Fonction_Profession",
-                "Code_Postal", "Ville", "Adresse", "Pays", "Listes_Diffusion_Intervenants",
-                "Listes_Diffusion_Cinema", "Listes_Diffusion_Direction", "Listes_Diffusion_Houdremont", "Erreur_emails"
-            ];
-
-            csvHeaders.forEach(header => {
-                const card = document.createElement('div');
-                card.className = 'mapping-card';
-                card.dataset.original = header;
-
-                const labelCol = document.createElement('label');
-                labelCol.innerText = "Colonne du fichier :";
-
-                const titleCol = document.createElement('div');
-                titleCol.className = 'csv-col-name';
-                titleCol.innerText = header;
-
-                const labelTarget = document.createElement('label');
-                labelTarget.innerText = "Correspondance Grist :";
-
-                const select = document.createElement('select');
-                select.className = 'mapping-select';
-
-                const defaultOpt = document.createElement('option');
-                defaultOpt.value = "";
-                defaultOpt.innerText = "-- Ignorer / Non assigné --";
-                select.appendChild(defaultOpt);
-
-                let matched = false;
-                const cleanHeader = header.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
-
-                officialColumns.forEach(col => {
-                    const opt = document.createElement('option');
-                    opt.value = col;
-                    opt.innerText = col;
-
-                    const cleanCol = col.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
-                    if (cleanHeader === cleanCol) {
-                        opt.selected = true;
-                        matched = true;
-                    }
-
-                    select.appendChild(opt);
-                });
-
-                if (!matched) {
-                    card.classList.add('unmatched');
-                }
-
-                select.addEventListener('change', function() {
-                    if (this.value) {
-                        card.classList.remove('unmatched');
-                    } else {
-                        card.classList.add('unmatched');
-                    }
-                });
-
-                card.appendChild(labelCol);
-                card.appendChild(titleCol);
-                card.appendChild(labelTarget);
-                card.appendChild(select);
-                container.appendChild(card);
-            });
-
-            loadDiffusionTags();
-        }
-
-        async function loadDiffusionTags() {
-            const tagsContainer = document.getElementById('tags-container');
-            tagsContainer.innerHTML = 'Chargement des listes...';
-
-            const listColumns = [
-                { col: "Listes_Diffusion_Intervenants", label: "Intervenants" },
-                { col: "Listes_Diffusion_Cinema", label: "Cinéma" },
-                { col: "Listes_Diffusion_Direction", label: "Direction" },
-                { col: "Listes_Diffusion_Houdremont", label: "Houdremont" }
-            ];
-
-            try {
-                const tables = await grist.docApi.listTables();
-                const foundTable = tables.find(t => t.toLowerCase() === 'etiquettes');
-                if (foundTable) {
-                    actualEtiquettesTableName = foundTable;
-                }
-
-                const rawRecords = await grist.docApi.fetchTable(actualEtiquettesTableName);
-                const records = normalizeGristRecords(rawRecords);
-
-                tagsContainer.innerHTML = '';
-
-                listColumns.forEach(group => {
-                    const uniqueTagsMap = new Map();
-
-                    records.forEach(row => {
-                        const val = row[group.col];
-                        const rowId = row.id;
-
-                        if (val !== undefined && val !== null && val !== "") {
-                            if (Array.isArray(val)) {
-                                val.forEach(v => {
-                                    if (v) uniqueTagsMap.set(String(v), rowId);
-                                });
-                            } else {
-                                uniqueTagsMap.set(String(val), rowId);
-                            }
-                        }
-                    });
-
-                    if (uniqueTagsMap.size > 0) {
-                        const groupTitle = document.createElement('div');
-                        groupTitle.style.cssText = "grid-column: 1 / -1; font-weight: 600; font-size: 0.85rem; color: var(--text-muted); margin-top: 8px;";
-                        groupTitle.innerText = `Catégorie : ${group.label}`;
-                        tagsContainer.appendChild(groupTitle);
-
-                        uniqueTagsMap.forEach((rowId, tagName) => {
-                            const label = document.createElement('label');
-                            label.className = 'tag-checkbox-label';
-
-                            const checkbox = document.createElement('input');
-                            checkbox.type = 'checkbox';
-                            checkbox.name = 'diffusion_tag';
-                            checkbox.dataset.column = group.col;
-                            checkbox.value = rowId;
-
-                            label.appendChild(checkbox);
-                            label.appendChild(document.createTextNode(' ' + tagName));
-                            tagsContainer.appendChild(label);
-                        });
-                    }
-                });
-
-                if (tagsContainer.children.length === 0) {
-                    tagsContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">Aucune liste trouvée.</span>';
-                }
-            } catch (err) {
-                console.error("Erreur étiquettes :", err);
-                tagsContainer.innerHTML = '<span style="color: var(--error-border); font-size: 0.85rem;">Erreur de chargement.</span>';
-            }
-        }
-
-        async function executeImport() {
-            const selects = document.querySelectorAll('.mapping-select');
-            const mapping = {};
-            
-            selects.forEach(select => {
-                const originalHeader = select.closest('.mapping-card').dataset.original;
-                const targetCol = select.value;
-                if (targetCol) {
-                    mapping[originalHeader] = targetCol;
-                }
-            });
-
-            if (Object.keys(mapping).length === 0) {
-                alert("Veuillez associer au moins une colonne avant d'importer.");
-                return;
-            }
-
-            const selectedTagsByColumn = {};
-            document.querySelectorAll('input[name="diffusion_tag"]:checked').forEach(cb => {
-                const colName = cb.dataset.column;
-                if (!selectedTagsByColumn[colName]) {
-                    selectedTagsByColumn[colName] = [];
-                }
-                const tagId = parseInt(cb.value, 10);
-                if (!isNaN(tagId)) {
-                    selectedTagsByColumn[colName].push(tagId);
-                }
-            });
-
-            const btn = document.getElementById('btnImport');
-            btn.disabled = true;
-            document.getElementById('status-msg').innerText = "Analyse et import initial...";
-
-            try {
-                const rawExisting = await grist.docApi.fetchTable('CONTACTS');
-                const existingContacts = normalizeGristRecords(rawExisting);
-
-                const multiRefColumns = [
-                    "Listes_Diffusion_Intervenants", "Listes_Diffusion_Cinema", 
-                    "Listes_Diffusion_Direction", "Listes_Diffusion_Houdremont"
-                ];
-
-                const columnCorrections = {
-                    "Téléphone_Principal": "Telephone_Principal",
-                    "Téléphones_Secondaires": "Telephones_Secondaires"
-                };
-
-                detectedDuplicates = [];
-                const recordsToInsert = [];
-
-                parsedData.forEach(row => {
-                    const newRecord = {};
-                    for (const [origKey, targetKey] of Object.entries(mapping)) {
-                        let val = row[origKey];
-                        const finalKey = columnCorrections[targetKey] || targetKey;
-
-                        if (val !== undefined && val !== "" && val !== null) {
-                            if (multiRefColumns.includes(finalKey)) {
-                                if (typeof val === 'string') {
-                                    const ids = val.split(/[,;]/).map(v => parseInt(v.trim(), 10)).filter(n => !isNaN(n));
-                                    newRecord[finalKey] = ['L', ...ids];
-                                } else if (Array.isArray(val)) {
-                                    const ids = val.map(v => parseInt(v, 10)).filter(n => !isNaN(n));
-                                    newRecord[finalKey] = ['L', ...ids];
-                                } else {
-                                    newRecord[finalKey] = val;
-                                }
-                            } else {
-                                newRecord[finalKey] = val;
-                            }
-                        }
-                    }
-
-                    for (const [colName, tagIds] of Object.entries(selectedTagsByColumn)) {
-                        if (tagIds.length > 0) {
-                            newRecord[colName] = ['L', ...tagIds];
-                        }
-                    }
-
-                    const emailP = newRecord.EMAIL_PRINCIPAL ? newRecord.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
-                    const emailS = newRecord.EMAILS_SECONDAIRES ? newRecord.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
-                    const nomContact = newRecord.NOM ? newRecord.NOM.toString().toLowerCase().trim() : "";
-
-                    let matchFound = null;
-                    let matchReason = "";
-
-                    for (const ec of existingContacts) {
-                        const ecEmailP = ec.EMAIL_PRINCIPAL ? ec.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
-                        const ecEmailS = ec.EMAILS_SECONDAIRES ? ec.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
-                        const ecNom = ec.NOM ? ec.NOM.toString().toLowerCase().trim() : "";
-
-                        if ((emailP && (emailP === ecEmailP || emailP === ecEmailS)) || 
-                            (emailS && (emailS === ecEmailP || emailS === ecEmailS))) {
-                            matchFound = ec;
-                            matchReason = "Correspondance email";
-                            break;
-                        } else if (nomContact && nomContact === ecNom) {
-                            matchFound = ec;
-                            matchReason = "Correspondance NOM";
-                        }
-                    }
-
-                    if (matchFound) {
-                        detectedDuplicates.push({
-                            imported: newRecord,
-                            existing: matchFound,
-                            reason: matchReason
-                        });
-                    } else {
-                        recordsToInsert.push(newRecord);
-                    }
-                });
-
-                const batchSize = 100;
-                for (let i = 0; i < recordsToInsert.length; i += batchSize) {
-                    const batch = recordsToInsert.slice(i, i + batchSize);
-                    const currentSent = Math.min(i + batchSize, recordsToInsert.length);
-                    document.getElementById('status-msg').innerText = `Envoi des contacts (${currentSent} / ${recordsToInsert.length})...`;
-                    
-                    const actions = batch.map(record => ['AddRecord', 'CONTACTS', null, record]);
-                    await grist.docApi.applyUserActions(actions);
-                }
-
-                document.getElementById('mapping-section').classList.add('hidden');
-                const reportSection = document.getElementById('report-section');
-                reportSection.classList.remove('hidden');
-
-                document.getElementById('report-summary').innerText = `Import initial terminé : ${recordsToInsert.length} contacts ajoutés.`;
-                document.getElementById('report-summary').style.color = "var(--success)";
-
-                if (detectedDuplicates.length > 0) {
-                    document.getElementById('dup-count').innerText = detectedDuplicates.length;
-                    document.getElementById('duplicate-trigger-container').classList.remove('hidden');
-                } else {
-                    document.getElementById('report-summary').innerText += " Aucun doublon détecté.";
-                }
-
-            } catch (err) {
-                console.error("Erreur import :", err);
-                alert("Échec de l'importation : " + (err.message || JSON.stringify(err)));
-                btn.disabled = false;
-                document.getElementById('status-msg').innerText = "Échec.";
-            }
-        }
-
-        async function startResolvingDuplicates() {
-            await preloadReferenceTables();
-            document.getElementById('duplicate-trigger-container').classList.add('hidden');
-            document.getElementById('duplicate-resolver-wrapper').classList.remove('hidden');
-            currentDuplicateIndex = 0;
-            renderCurrentDuplicate();
-        }
-
-        function renderCurrentDuplicate() {
-            const wrapper = document.getElementById('duplicate-resolver-wrapper');
-            if (currentDuplicateIndex >= detectedDuplicates.length) {
-                wrapper.innerHTML = `<div style="background: #ecfdf5; border: 1px solid var(--success); padding: 20px; border-radius: 8px; color: #065f46; text-align:center; font-weight: 600;">
-                    Tous les doublons ont été traités avec succès !
-                </div>`;
-                return;
-            }
-
-            const item = detectedDuplicates[currentDuplicateIndex];
-            const ext = item.existing;
-            const imp = item.imported;
-
-            let mergedEmailSec = ext.EMAILS_SECONDAIRES || "";
-            if (imp.EMAIL_PRINCIPAL && imp.EMAIL_PRINCIPAL !== ext.EMAIL_PRINCIPAL && !mergedEmailSec.includes(imp.EMAIL_PRINCIPAL)) {
-                mergedEmailSec = mergedEmailSec ? mergedEmailSec + ", " + imp.EMAIL_PRINCIPAL : imp.EMAIL_PRINCIPAL;
-            }
-            if (imp.EMAILS_SECONDAIRES) {
-                imp.EMAILS_SECONDAIRES.split(',').forEach(e => {
-                    const cleanE = e.trim();
-                    if (cleanE && !mergedEmailSec.includes(cleanE)) {
-                        mergedEmailSec = mergedEmailSec ? mergedEmailSec + ", " + cleanE : cleanE;
-                    }
-                });
-            }
-
-            const extTelSec = ext.Telephones_Secondaires || ext.Téléphones_Secondaires || "";
-            const impTelSec = imp.Telephones_Secondaires || imp.Téléphones_Secondaires || "";
-            const impTelPrin = imp.Telephone_Principal || imp.Téléphone_Principal || "";
-            const extTelPrin = ext.Telephone_Principal || ext.Téléphone_Principal || "";
-
-            let mergedTelSec = extTelSec;
-            if (impTelPrin && impTelPrin !== extTelPrin && !mergedTelSec.includes(impTelPrin)) {
-                mergedTelSec = mergedTelSec ? mergedTelSec + ", " + impTelPrin : impTelPrin;
-            }
-            if (impTelSec) {
-                impTelSec.split(',').forEach(t => {
-                    const cleanT = t.trim();
-                    if (cleanT && !mergedTelSec.includes(cleanT)) {
-                        mergedTelSec = mergedTelSec ? mergedTelSec + ", " + cleanT : cleanT;
-                    }
-                });
-            }
-
-            const mergedAdresse = ext.Adresse || imp.Adresse || "";
-            const mergedNomStruct = ext.NOM_Structure || imp.NOM_Structure || "";
-
-            let mergedComment = ext.Commentaire_Description || "";
-            if (imp.Commentaire_Description && imp.Commentaire_Description !== ext.Commentaire_Description) {
-                mergedComment = mergedComment ? mergedComment + "\n---\n" + imp.Commentaire_Description : imp.Commentaire_Description;
-            }
-
-            const extTypeStructId = ext.TYPE_DE_STRUCTURE_CONTACT || imp.TYPE_DE_STRUCTURE_CONTACT || "";
-            const extDomaineId = ext.DOMAINE_D_ACTIVITES || imp.DOMAINE_D_ACTIVITES || "";
-            const extStatutJurId = ext.STATUT_JURIDIQUE || imp.STATUT_JURIDIQUE || "";
-
-            const createSelectOptions = (records, currentId) => {
-                let html = `<option value="">-- Aucun --</option>`;
-                records.forEach(r => {
-                    const label = getRefLabel(records, r.id);
-                    const selected = (r.id === parseInt(currentId, 10)) ? 'selected' : '';
-                    html += `<option value="${r.id}" ${selected}>${label}</option>`;
-                });
-                return html;
-            };
-
-            wrapper.innerHTML = `
-                <div class="duplicate-resolver-container">
-                    <div class="resolver-header">
-                        <span>Doublon ${currentDuplicateIndex + 1} sur ${detectedDuplicates.length} (Motif : ${item.reason})</span>
-                        <span style="font-size: 0.85rem; font-weight: normal;">ID Fiche Grist existante : ${ext.id}</span>
-                    </div>
-
-                    <div class="resolver-grid">
-                        <div class="resolver-column">
-                            <h4>Fiche Existante (Grist)</h4>
-                            <div class="form-group"><label>Nom / Prénom</label><input type="text" disabled value="${ext.NOM || ''} ${ext.PRENOM || ''}"></div>
-                            <div class="form-group"><label>Email Principal</label><input type="text" disabled value="${ext.EMAIL_PRINCIPAL || ''}"></div>
-                            <div class="form-group"><label>Emails Secondaires</label><input type="text" disabled value="${ext.EMAILS_SECONDAIRES || ''}"></div>
-                            <div class="form-group"><label>Téléphone Principal</label><input type="text" disabled value="${extTelPrin}"></div>
-                            <div class="form-group"><label>Téléphones Secondaires</label><input type="text" disabled value="${extTelSec}"></div>
-                            <div class="form-group"><label>Nom Structure</label><input type="text" disabled value="${ext.NOM_Structure || ''}"></div>
-                            <div class="form-group"><label>Adresse</label><input type="text" disabled value="${ext.Adresse || ''}"></div>
-                            <div class="form-group"><label>Type de Structure</label><input type="text" disabled value="${getRefLabel(refCaches.typeStruct, ext.TYPE_DE_STRUCTURE_CONTACT)}"></div>
-                            <div class="form-group"><label>Domaine d'activités</label><input type="text" disabled value="${getRefLabel(refCaches.domaine, ext.DOMAINE_D_ACTIVITES)}"></div>
-                            <div class="form-group"><label>Statut juridique</label><input type="text" disabled value="${getRefLabel(refCaches.statutJur, ext.STATUT_JURIDIQUE)}"></div>
-                            <div class="form-group"><label>Commentaire / Description</label><textarea disabled>${ext.Commentaire_Description || ''}</textarea></div>
-                        </div>
-
-                        <div class="resolver-column" style="background: #fdfdfd; border-color: var(--primary);">
-                            <h4>Proposition Modifiable (Fusion)</h4>
-                            <div class="form-group"><label>Nom</label><input type="text" id="edit-nom" value="${imp.NOM || ext.NOM || ''}"></div>
-                            <div class="form-group"><label>Prénom</label><input type="text" id="edit-prenom" value="${imp.PRENOM || ext.PRENOM || ''}"></div>
-                            <div class="form-group"><label>Email Principal</label><input type="text" id="edit-emailp" value="${ext.EMAIL_PRINCIPAL || imp.EMAIL_PRINCIPAL || ''}"></div>
-                            <div class="form-group"><label>Emails Secondaires (fusionnés)</label><input type="text" id="edit-emails" value="${mergedEmailSec}"></div>
-                            <div class="form-group"><label>Téléphone Principal</label><input type="text" id="edit-telp" value="${extTelPrin || impTelPrin}"></div>
-                            <div class="form-group"><label>Téléphones Secondaires (fusionnés)</label><input type="text" id="edit-tels" value="${mergedTelSec}"></div>
-                            <div class="form-group"><label>Nom Structure</label><input type="text" id="edit-nomstruct" value="${mergedNomStruct}"></div>
-                            <div class="form-group"><label>Adresse</label><input type="text" id="edit-adresse" value="${mergedAdresse}"></div>
-                            
-                            <div class="form-group">
-                                <label>Type de Structure</label>
-                                <select id="edit-typestruct">
-                                    ${createSelectOptions(refCaches.typeStruct, extTypeStructId)}
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Domaine d'activités</label>
-                                <select id="edit-domaine">
-                                    ${createSelectOptions(refCaches.domaine, extDomaineId)}
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Statut juridique</label>
-                                <select id="edit-statut">
-                                    ${createSelectOptions(refCaches.statutJur, extStatutJurId)}
-                                </select>
-                            </div>
-
-                            <div class="form-group"><label>Commentaire / Description</label><textarea id="edit-commentaire">${mergedComment}</textarea></div>
-                        </div>
-                    </div>
-
-                    <div class="resolver-actions">
-                        <button class="btn btn-danger" onclick="resolveDuplicate('delete')">🗑️ Supprimer les données importées</button>
-                        <button class="btn btn-success" onclick="resolveDuplicate('validate')">✅ Valider les modifications du contact</button>
-                    </div>
-                </div>
-            `;
-        }
-
-        async function resolveDuplicate(action) {
-            const item = detectedDuplicates[currentDuplicateIndex];
-            try {
-                if (action === 'validate') {
-                    const rawTypeStruct = document.getElementById('edit-typestruct').value;
-                    const rawDomaine = document.getElementById('edit-domaine').value;
-                    const rawStatut = document.getElementById('edit-statut').value;
-
-                    const updatedFields = {
-                        NOM: document.getElementById('edit-nom').value,
-                        PRENOM: document.getElementById('edit-prenom').value,
-                        EMAIL_PRINCIPAL: document.getElementById('edit-emailp').value,
-                        EMAILS_SECONDAIRES: document.getElementById('edit-emails').value,
-                        Telephone_Principal: document.getElementById('edit-telp').value,
-                        Telephones_Secondaires: document.getElementById('edit-tels').value,
-                        NOM_Structure: document.getElementById('edit-nomstruct').value,
-                        Adresse: document.getElementById('edit-adresse').value,
-                        TYPE_DE_STRUCTURE_CONTACT: rawTypeStruct ? parseInt(rawTypeStruct, 10) : null,
-                        DOMAINE_D_ACTIVITES: rawDomaine ? parseInt(rawDomaine, 10) : null,
-                        STATUT_JURIDIQUE: rawStatut ? parseInt(rawStatut, 10) : null,
-                        Commentaire_Description: document.getElementById('edit-commentaire').value
-                    };
-
-                    await grist.docApi.applyUserActions([
-                        ['UpdateRecord', 'CONTACTS', item.existing.id, updatedFields]
-                    ]);
-                }
-
-                currentDuplicateIndex++;
-                renderCurrentDuplicate();
-            } catch (err) {
-                console.error("Erreur lors de la résolution du doublon :", err);
-                alert("Erreur : " + err.message);
-            }
-        }
-    </script>
+      }
+      valeurs.push(courant);
+      return valeurs.map(v => v.replace(/^"|"$/g, '').replace(/""/g, '"'));
+    }
+
+    async function importerDansGrist(records) {
+      try {
+        const tableId = await grist.selectedTable.getTableId();
+        const actions = records.map(rec => ['AddRecord', tableId, null, rec]);
+        
+        await grist.docApi.applyUserActions(actions);
+        afficherStatut(`Succès ! ${records.length} contact(s) importé(s) avec succès.`, "success");
+      } catch (err) {
+        afficherStatut("Erreur lors de l'écriture dans Grist : " + err.message, "error");
+      }
+    }
+  </script>
 </body>
 </html>
