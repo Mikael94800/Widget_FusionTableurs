@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Importateur Intelligent de Contacts (Sans CDN)</title>
+    <title>Importateur Intelligent de Contacts</title>
     <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
     <style>
         :root {
@@ -253,29 +253,25 @@
         async function preloadReferenceTables() {
             try {
                 const tables = await grist.docApi.listTables();
-                const findTable = (kwList) => tables.find(t => kwList.some(kw => t.toLowerCase().includes(kw)));
-                const tDomaine = findTable(['domaine', 'activite']);
-                const tTypeStruct = findTable(['type', 'structure']);
-                const tStatutJur = findTable(['statut', 'juridique']);
+                const foundTable = tables.find(t => t.toLowerCase() === 'etiquettes');
+                if (foundTable) actualEtiquettesTableName = foundTable;
 
-                if (tDomaine) refCaches.domaine = normalizeGristRecords(await grist.docApi.fetchTable(tDomaine));
-                if (tTypeStruct) refCaches.typeStruct = normalizeGristRecords(await grist.docApi.fetchTable(tTypeStruct));
-                if (tStatutJur) refCaches.statutJur = normalizeGristRecords(await grist.docApi.fetchTable(tStatutJur));
+                const rawRecords = await grist.docApi.fetchTable(actualEtiquettesTableName);
+                const records = normalizeGristRecords(rawRecords);
+
+                // Extraction ciblée depuis la table ETIQUETTES selon les colonnes identifiées
+                refCaches.domaine = records.filter(r => r.DOMAINE_D_ACTIVITES !== undefined && r.DOMAINE_D_ACTIVITES !== null && r.DOMAINE_D_ACTIVITES !== "")
+                    .map(r => ({ id: r.id, label: r.DOMAINE_D_ACTIVITES }));
+
+                refCaches.typeStruct = records.filter(r => r.TYPE_DE_STRUCTURE_CONTACT !== undefined && r.TYPE_DE_STRUCTURE_CONTACT !== null && r.TYPE_DE_STRUCTURE_CONTACT !== "")
+                    .map(r => ({ id: r.id, label: r.TYPE_DE_STRUCTURE_CONTACT }));
+
+                refCaches.statutJur = records.filter(r => r.STATUT_JURIDIQUE !== undefined && r.STATUT_JURIDIQUE !== null && r.STATUT_JURIDIQUE !== "")
+                    .map(r => ({ id: r.id, label: r.STATUT_JURIDIQUE }));
+
             } catch (err) {
                 console.warn("Tables de référence non chargées :", err);
             }
-        }
-
-        function getRefLabel(records, id) {
-            if (id === undefined || id === null || id === "") return "";
-            const numId = parseInt(id, 10);
-            if (isNaN(numId)) return String(id);
-            const found = records.find(r => r.id === numId);
-            if (!found) return `ID: ${id}`;
-            for (const k of ['NOM', 'Nom', 'nom', 'LIBELLE', 'Libelle', 'libelle']) {
-                if (found[k]) return String(found[k]);
-            }
-            return `ID: ${id}`;
         }
 
         function handleDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('dragover'); }
@@ -632,12 +628,11 @@
                 mergedComment = mergedComment ? mergedComment + "\n---\n" + imp.Commentaire_Description : imp.Commentaire_Description;
             }
 
-            const createSelectOptions = (records, currentId) => {
+            const createSelectOptionsFromCache = (itemsList, currentId) => {
                 let html = `<option value="">-- Aucun --</option>`;
-                records.forEach(r => {
-                    const label = getRefLabel(records, r.id);
-                    const selected = (r.id === parseInt(currentId, 10)) ? 'selected' : '';
-                    html += `<option value="${r.id}" ${selected}>${label}</option>`;
+                itemsList.forEach(itemObj => {
+                    const selected = (parseInt(itemObj.id, 10) === parseInt(currentId, 10)) ? 'selected' : '';
+                    html += `<option value="${itemObj.id}" ${selected}>${itemObj.label}</option>`;
                 });
                 return html;
             };
@@ -673,15 +668,15 @@
                             
                             <div class="form-group">
                                 <label>Type de Structure</label>
-                                <select id="edit-typestruct">${createSelectOptions(refCaches.typeStruct, ext.TYPE_DE_STRUCTURE_CONTACT)}</select>
+                                <select id="edit-typestruct">${createSelectOptionsFromCache(refCaches.typeStruct, ext.TYPE_DE_STRUCTURE_CONTACT)}</select>
                             </div>
                             <div class="form-group">
                                 <label>Domaine d'activités</label>
-                                <select id="edit-domaine">${createSelectOptions(refCaches.domaine, ext.DOMAINE_D_ACTIVITES)}</select>
+                                <select id="edit-domaine">${createSelectOptionsFromCache(refCaches.domaine, ext.DOMAINE_D_ACTIVITES)}</select>
                             </div>
                             <div class="form-group">
                                 <label>Statut juridique</label>
-                                <select id="edit-statut">${createSelectOptions(refCaches.statutJur, ext.STATUT_JURIDIQUE)}</select>
+                                <select id="edit-statut">${createSelectOptionsFromCache(refCaches.statutJur, ext.STATUT_JURIDIQUE)}</select>
                             </div>
                             <div class="form-group"><label>Commentaire</label><textarea id="edit-commentaire">${mergedComment}</textarea></div>
                         </div>
@@ -700,7 +695,6 @@
             const item = detectedDuplicates[currentDuplicateIndex];
             try {
                 if (action === 'validate_fusion') {
-                    // Option 1 : Modifier la fiche existante avec les champs ajustés
                     const rawTypeStruct = document.getElementById('edit-typestruct').value;
                     const rawDomaine = document.getElementById('edit-domaine').value;
                     const rawStatut = document.getElementById('edit-statut').value;
@@ -724,7 +718,6 @@
                     ]);
                 } 
                 else if (action === 'delete_grist_and_import') {
-                    // Option 3 : Supprimer le doublon présent dans Contacts et importer la fiche courante
                     const rawTypeStruct = document.getElementById('edit-typestruct').value;
                     const rawDomaine = document.getElementById('edit-domaine').value;
                     const rawStatut = document.getElementById('edit-statut').value;
@@ -749,7 +742,6 @@
                         ['AddRecord', 'CONTACTS', null, finalImportRecord]
                     ]);
                 }
-                // Option 2 ('ignore_import') : Ne rien faire sur Grist, on passe simplement au doublon suivant (la fiche d'import est jetée).
 
                 currentDuplicateIndex++;
                 renderCurrentDuplicate();
