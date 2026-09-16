@@ -35,7 +35,6 @@
       <div class="drop-zone-icon">📁</div>
       <div class="drop-zone-text">Glissez votre fichier CSV ici ou</div>
       <button class="btn-file">Parcourir les fichiers</button>
-      <!-- CORRECTION ICI : gererFichierSelectionne collé -->
       <input type="file" id="file-input" accept=".csv" onchange="gererFichierSelectionne(this.files[0])">
     </div>
 
@@ -106,7 +105,7 @@
       const premiereLigne = lignes[0];
       const separateur = premiereLigne.includes(';') ? ';' : ',';
       
-      const enTetes = decouperLigne(lignes[0], separateur);
+      const enTetes Bruts = decouperLigne(lignes[0], separateur);
       const resultats = [];
 
       for (let i = 1; i < lignes.length; i++) {
@@ -114,10 +113,18 @@
         if (valeurs.length === 0) continue;
         
         const objetLigne = {};
-        enTetes.forEach((entete, index) => {
-          objetLigne[entete.trim()] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
+        enTetesBruts.forEach((entete, index) => {
+          const cleanEntete = entete.trim();
+          // On ignore les colonnes dont le nom est vide pour éviter le KeyError
+          if (cleanEntete !== "") {
+            objetLigne[cleanEntete] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
+          }
         });
-        resultats.push(objetLigne);
+        
+        // N'ajoute la ligne que si elle contient au moins une donnée
+        if (Object.keys(objetLigne).length > 0) {
+          resultats.push(objetLigne);
+        }
       }
       return resultats;
     }
