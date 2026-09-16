@@ -21,6 +21,11 @@
     .btn-file:hover { background: #1d4ed8; }
     input[type="file"] { display: none; }
     
+    .mapping-container { text-align: left; margin-top: 20px; display: none; }
+    .mapping-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; background: #f1f5f9; padding: 8px 12px; border-radius: 6px; }
+    .btn-import { background: #16a34a; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; width: 100%; margin-top: 15px; }
+    .btn-import:hover { background: #15803d; }
+
     .status-box { margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 13px; display: none; text-align: left; }
     .status-box.success { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; display: block; }
     .status-box.error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; display: block; }
@@ -38,11 +43,22 @@
       <input type="file" id="file-input" accept=".csv" onchange="gererFichierSelectionne(this.files[0])">
     </div>
 
+    <!-- Étape de mapping des colonnes détectées -->
+    <div id="mapping-container" class="mapping-container">
+      <h3>Correspondance des colonnes</h3>
+      <p style="margin-bottom: 12px;">Cochez les colonnes du CSV à importer :</p>
+      <div id="mapping-list"></div>
+      <button class="btn-import" onclick="validerEtLancerImport()">Confirmer et Importer</button>
+    </div>
+
     <div id="status-box" class="status-box"></div>
   </div>
 
   <script>
     grist.ready({ requiredAccess: 'full' });
+
+    let donneesCSV Brutes = [];
+    let enTetesCSV = [];
 
     const dropZone = document.getElementById('drop-zone');
 
@@ -83,14 +99,17 @@
       reader.onload = function(e) {
         try {
           const text = e.target.result;
-          const records = parserCSV(text);
+          const parsed = parserCSV(text);
           
-          if (records.length === 0) {
+          enTetesCSV = parsed.enTetes;
+          donneesCSVBrutes = parsed.lignes;
+          
+          if (donneesCSVBrutes.length === 0 || enTetesCSV.length === 0) {
             afficherStatut("Le fichier CSV est vide ou mal formaté.", "error");
             return;
           }
 
-          importerDansGrist(records);
+          afficherInterfaceMapping();
         } catch (err) {
           afficherStatut("Erreur lors de l'analyse du CSV : " + err.message, "error");
         }
@@ -98,14 +117,56 @@
       reader.readAsText(file, 'UTF-8');
     }
 
+    function afficherInterfaceMapping() {
+      document.getElementById('status-box').style.display = 'none';
+      const mappingList = document.getElementById('mapping-list');
+      mappingList.innerHTML = '';
+
+      enTetesCSV.forEach(entete => {
+        const row = document.createElement('div');
+        row.className = 'mapping-row';
+        row.innerHTML = `
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%;">
+            <input type="checkbox" checked value="${entete}" class="col-checkbox">
+            <span>Colonne CSV : <strong>${entete}</strong></span>
+          </label>
+        `;
+        mappingList.appendChild(row);
+      });
+
+      document.getElementById('mapping-container').style.display = 'block';
+    }
+
+    async function validerEtLancerImport() {
+      const checkboxes = document.querySelectorAll('.col-checkbox:checked');
+      const colonnesSelectionnees = Array.from(checkboxes).map(cb => cb.value);
+
+      if (colonnesSelectionnees.length === 0) {
+        afficherStatut("Veuillez sélectionner au moins une colonne à importer.", "error");
+        return;
+      }
+
+      const recordsFiltres = donneesCSVBrutes.map(ligne => {
+        const objetFiltre = {};
+        colonnesSelectionnees.forEach(col => {
+          if (ligne[col] !== undefined) {
+            objetFiltre[col] = ligne[col];
+          }
+        });
+        return objetFiltre;
+      });
+
+      await importerDansGrist(recordsFiltres);
+    }
+
     function parserCSV(text) {
       const lignes = text.split(/\r\n|\n/).filter(l => l.trim() !== "");
-      if (lignes.length < 2) return [];
+      if (lignes.length < 2) return { enTetes: [], lignes: [] };
 
       const premiereLigne = lignes[0];
       const separateur = premiereLigne.includes(';') ? ';' : ',';
       
-      const enTetesBruts = decouperLigne(lignes[0], separateur);
+      const enTetes = decouperLigne(lignes[0], separateur).map(e => e.trim()).filter(e => e !== "");
       const resultats = [];
 
       for (let i = 1; i < lignes.length; i++) {
@@ -113,18 +174,12 @@
         if (valeurs.length === 0) continue;
         
         const objetLigne = {};
-        enTetesBruts.forEach((entete, index) => {
-          const cleanEntete = entete.trim();
-          if (cleanEntete !== "") {
-            objetLigne[cleanEntete] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
-          }
+        enTetes.forEach((entete, index) => {
+          objetLigne[entete] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
         });
-        
-        if (Object.keys(objetLigne).length > 0) {
-          resultats.push(objetLigne);
-        }
+        resultats.push(objetLigne);
       }
-      return resultats;
+      return { enTetes, lignes: resultats };
     }
 
     function decouperLigne(ligne, separateur) {
@@ -149,12 +204,14 @@
 
     async function importerDansGrist(records) {
       try {
+        afficherStatut("Importation en cours dans Grist...", "success");
         const tableId = await grist.selectedTable.getTableId();
         const actions = records.map(rec => ['AddRecord', tableId, null, rec]);
         
         await grist.docApi.applyUserActions(actions);
+        document.getElementById('mapping-container').style.display = 'none';
         afficherStatut(`Succès ! ${records.length} contact(s) importé(s) avec succès.`, "success");
-      } catch (err) {
+      } catcH (err) {
         afficherStatut("Erreur lors de l'écriture dans Grist : " + err.message, "error");
       }
     }
