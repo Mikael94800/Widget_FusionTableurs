@@ -259,7 +259,6 @@
                 const rawRecords = await grist.docApi.fetchTable(actualEtiquettesTableName);
                 const records = normalizeGristRecords(rawRecords);
 
-                // Extraction ciblée depuis la table ETIQUETTES selon les colonnes identifiées
                 refCaches.domaine = records.filter(r => r.DOMAINE_D_ACTIVITES !== undefined && r.DOMAINE_D_ACTIVITES !== null && r.DOMAINE_D_ACTIVITES !== "")
                     .map(r => ({ id: r.id, label: r.DOMAINE_D_ACTIVITES }));
 
@@ -337,6 +336,76 @@
             return valeurs.map(v => v.replace(/^"|"$/g, '').replace(/""/g, '"'));
         }
 
+        function findMatchingGristColumn(header) {
+            const cleanHeader = header.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
+            
+            // Dictionnaire des synonymes fréquents pour assurer la reconnaissance automatique
+            const synonyms = {
+                'nom': 'NOM',
+                'prenom': 'PRENOM',
+                'email': 'EMAIL_PRINCIPAL',
+                'courriel': 'EMAIL_PRINCIPAL',
+                'mail': 'EMAIL_PRINCIPAL',
+                'emailprincipal': 'EMAIL_PRINCIPAL',
+                'emailssecondaires': 'EMAILS_SECONDAIRES',
+                'autresemails': 'EMAILS_SECONDAIRES',
+                'telephone': 'Téléphone_Principal',
+                'telephoneprincipal': 'Téléphone_Principal',
+                'tel': 'Téléphone_Principal',
+                'tél': 'Téléphone_Principal',
+                'telephonessecondaires': 'Téléphones_Secondaires',
+                'autrestelephones': 'Téléphones_Secondaires',
+                'nomstructure': 'NOM_Structure',
+                'structure': 'NOM_Structure',
+                'entreprise': 'NOM_Structure',
+                'societe': 'NOM_Structure',
+                'adresse': 'Adresse',
+                'rue': 'Adresse',
+                'codepostal': 'Code_Postal',
+                'cp': 'Code_Postal',
+                'ville': 'Ville',
+                'commune': 'Ville',
+                'pays': 'Pays',
+                'fonction': 'Fonction_Profession',
+                'profession': 'Fonction_Profession',
+                'poste': 'Fonction_Profession',
+                'commentaire': 'Commentaire_Description',
+                'description': 'Commentaire_Description',
+                'notes': 'Commentaire_Description',
+                'statutjuridique': 'STATUT_JURIDIQUE',
+                'statut': 'STATUT_JURIDIQUE',
+                'typedestructurercontact': 'TYPE_DE_STRUCTURE_CONTACT',
+                'typestructure': 'TYPE_DE_STRUCTURE_CONTACT',
+                'domainedactivites': 'DOMAINE_D_ACTIVITES',
+                'domaine': 'DOMAINE_D_ACTIVITES',
+                'activite': 'DOMAINE_D_ACTIVITES',
+                'secteur': 'DOMAINE_D_ACTIVITES',
+                'service': 'Service',
+                'creepar': 'Cree_Par',
+                'datesaisie': 'Date_Saisie'
+            };
+
+            if (synonyms[cleanHeader]) {
+                return synonyms[cleanHeader];
+            }
+
+            const officialColumns = [
+                "Cree_Par", "Date_Saisie", "Service", "DOMAINE_D_ACTIVITES",
+                "Commentaire_Description", "STATUT_JURIDIQUE", "TYPE_DE_STRUCTURE_CONTACT",
+                "NOM_Structure", "NOM", "PRENOM", "EMAIL_PRINCIPAL", "EMAILS_SECONDAIRES",
+                "Téléphone_Principal", "Téléphones_Secondaires", "Fonction_Profession",
+                "Code_Postal", "Ville", "Adresse", "Pays", "Listes_Diffusion_Intervenants",
+                "Listes_Diffusion_Cinema", "Listes_Diffusion_Direction", "Listes_Diffusion_Houdremont", "Erreur_emails"
+            ];
+
+            for (const col of officialColumns) {
+                const cleanCol = col.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
+                if (cleanHeader === cleanCol) return col;
+            }
+
+            return null;
+        }
+
         async function showMappingInterface() {
             document.getElementById('upload-section').classList.add('hidden');
             document.getElementById('mapping-section').classList.remove('hidden');
@@ -374,19 +443,22 @@
                 defaultOpt.innerText = "-- Ignorer / Non assigné --";
                 select.appendChild(defaultOpt);
 
-                let matched = false;
-                const cleanHeader = header.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
+                const matchedCol = findMatchingGristColumn(header);
 
                 officialColumns.forEach(col => {
                     const opt = document.createElement('option');
                     opt.value = col;
                     opt.innerText = col;
-                    const cleanCol = col.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
-                    if (cleanHeader === cleanCol) { opt.selected = true; matched = true; }
+                    if (matchedCol && col === matchedCol) {
+                        opt.selected = true;
+                    }
                     select.appendChild(opt);
                 });
 
-                if (!matched) card.classList.add('unmatched');
+                if (!matchedCol) {
+                    card.classList.add('unmatched');
+                }
+
                 select.addEventListener('change', function() {
                     if (this.value) card.classList.remove('unmatched');
                     else card.classList.add('unmatched');
