@@ -105,7 +105,7 @@
       const premiereLigne = lignes[0];
       const separateur = premiereLigne.includes(';') ? ';' : ',';
       
-      const enTetes Bruts = decouperLigne(lignes[0], separateur);
+      const enTetesBruts = decouperLigne(lignes[0], separateur);
       const resultats = [];
 
       for (let i = 1; i < lignes.length; i++) {
@@ -115,13 +115,11 @@
         const objetLigne = {};
         enTetesBruts.forEach((entete, index) => {
           const cleanEntete = entete.trim();
-          // On ignore les colonnes dont le nom est vide pour éviter le KeyError
           if (cleanEntete !== "") {
             objetLigne[cleanEntete] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
           }
         });
         
-        // N'ajoute la ligne que si elle contient au moins une donnée
         if (Object.keys(objetLigne).length > 0) {
           resultats.push(objetLigne);
         }
