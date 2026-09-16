@@ -57,7 +57,7 @@
   <script>
     grist.ready({ requiredAccess: 'full' });
 
-    let donneesCSV Brutes = [];
+    let donneesCSVBrutes = [];
     let enTetesCSV = [];
 
     const dropZone = document.getElementById('drop-zone');
@@ -211,7 +211,7 @@
         await grist.docApi.applyUserActions(actions);
         document.getElementById('mapping-container').style.display = 'none';
         afficherStatut(`Succès ! ${records.length} contact(s) importé(s) avec succès.`, "success");
-      } catcH (err) {
+      } catch (err) {
         afficherStatut("Erreur lors de l'écriture dans Grist : " + err.message, "error");
       }
     }
