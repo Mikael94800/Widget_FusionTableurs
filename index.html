@@ -8,7 +8,7 @@
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { margin: 0; padding: 20px; background-color: #f8fafc; font-size: 14px; display: flex; flex-direction: column; height: 100vh; }
     
-    .card { background: #ffffff; border-radius: 8px; padding: 24px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); max-width: 700px; margin: auto; width: 100%; text-align: center; }
+    .card { background: #ffffff; border-radius: 8px; padding: 24px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); max-width: 800px; margin: auto; width: 100%; text-align: center; }
     h2 { color: #1e293b; margin-top: 0; margin-bottom: 8px; font-size: 20px; }
     p { color: #64748b; margin-bottom: 24px; font-size: 14px; }
     
@@ -21,8 +21,8 @@
     .btn-file:hover { background: #1d4ed8; }
     input[type="file"] { display: none; }
     
-    .mapping-container { text-align: left; margin-top: 20px; display: none; }
-    .mapping-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; background: #f1f5f9; padding: 8px 12px; border-radius: 6px; }
+    .mapping-container { text-align: left; margin-top: 20px; display: none; max-height: 400px; overflow-y: auto; padding-right: 5px; }
+    .mapping-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; background: #f1f5f9; padding: 8px 12px; border-radius: 6px; gap: 10px; }
     .btn-import { background: #16a34a; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; width: 100%; margin-top: 15px; }
     .btn-import:hover { background: #15803d; }
 
@@ -43,10 +43,10 @@
       <input type="file" id="file-input" accept=".csv" onchange="gererFichierSelectionne(this.files[0])">
     </div>
 
-    <!-- Étape de mapping des colonnes détectées -->
+    <!-- Étape de mapping des colonnes avec les ID Grist -->
     <div id="mapping-container" class="mapping-container">
       <h3>Correspondance des colonnes</h3>
-      <p style="margin-bottom: 12px;">Cochez les colonnes du CSV à importer :</p>
+      <p style="margin-bottom: 12px;">Associez chaque colonne de votre CSV à sa cible technique dans Grist[cite: 1] :</p>
       <div id="mapping-list"></div>
       <button class="btn-import" onclick="validerEtLancerImport()">Confirmer et Importer</button>
     </div>
@@ -59,6 +59,16 @@
 
     let donneesCSVBrutes = [];
     let enTetesCSV = [];
+
+    // Liste des ID techniques Grist de la table Contacts[cite: 1]
+    const colonnesGristCibles = [
+      "Cree_Par", "Date_Saisie", "Service", "DOMAINE_D_ACTIVITES", 
+      "Commentaire_Description", "STATUT_JURIDIQUE", "TYPE_DE_STRUCTURE_CONTACT", 
+      "NOM_Structure", "NOM", "PRENOM", "EMAIL_PRINCIPAL", "EMAILS_SECONDAIRES", 
+      "Téléphone_Principal", "Téléphones_Secondaires", "Fonction_Profession", 
+      "Code_Postal", "Ville", "Adresse", "Pays", "Listes_Diffusion_Intervenants", 
+      "Listes_Diffusion_Cinema", "Listes_Diffusion_Direction", "Listes_Diffusion_Houdremont", "Erreur_emails"
+    ];
 
     const dropZone = document.getElementById('drop-zone');
 
@@ -123,13 +133,35 @@
       mappingList.innerHTML = '';
 
       enTetesCSV.forEach(entete => {
+        // Tentative d'auto-sélection intelligente basée sur le nom de la colonne
+        let suggestion = "";
+        const enteteNormalized = entete.toLowerCase().replace(/[^a-z0-9]/g, '');
+        
+        colonnesGristCibles.forEach(colGrist => {
+          const colNormalized = colGrist.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (colNormalized === enteteNormalized || colNormalized.includes(enteteNormalized) || enteteNormalized.includes(colNormalized)) {
+            suggestion = colGrist;
+          }
+        });
+
         const row = document.createElement('div');
         row.className = 'mapping-row';
+        
+        let optionsHTML = `<option value="">-- Ne pas importer --</option>`;
+        colonnesGristCibles.forEach(colGrist => {
+          const selected = (colGrist === suggestion) ? 'selected' : '';
+          optionsHTML += `<option value="${colGrist}" ${selected}>${colGrist}</option>`;
+        });
+
         row.innerHTML = `
-          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%;">
-            <input type="checkbox" checked value="${entete}" class="col-checkbox">
-            <span>Colonne CSV : <strong>${entete}</strong></span>
-          </label>
+          <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            <span>CSV : <strong>${entete}</strong></span>
+          </div>
+          <div style="flex: 1;">
+            <select class="col-select" data-csv="${entete}" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid #cbd5e1; background: #fff;">
+              ${optionsHTML}
+            </select>
+          </div>
         `;
         mappingList.appendChild(row);
       });
@@ -138,21 +170,29 @@
     }
 
     async function validerEtLancerImport() {
-      const checkboxes = document.querySelectorAll('.col-checkbox:checked');
-      const colonnesSelectionnees = Array.from(checkboxes).map(cb => cb.value);
+      const selects = document.querySelectorAll('.col-select');
+      const mappingAssociations = {};
 
-      if (colonnesSelectionnees.length === 0) {
-        afficherStatut("Veuillez sélectionner au moins une colonne à importer.", "error");
+      selects.forEach(select => {
+        const csvCol = select.getAttribute('data-csv');
+        const gristCol = select.value;
+        if (gristCol) {
+          mappingAssociations[csvCol] = gristCol;
+        }
+      });
+
+      if (Object.keys(mappingAssociations).length === 0) {
+        afficherStatut("Veuillez associer au moins une colonne CSV à une colonne Grist.", "error");
         return;
       }
 
       const recordsFiltres = donneesCSVBrutes.map(ligne => {
         const objetFiltre = {};
-        colonnesSelectionnees.forEach(col => {
-          if (ligne[col] !== undefined) {
-            objetFiltre[col] = ligne[col];
+        for (const [csvCol, gristCol] of Object.entries(mappingAssociations)) {
+          if (ligne[csvCol] !== undefined) {
+            objetFiltre[gristCol] = ligne[csvCol];
           }
-        });
+        }
         return objetFiltre;
       });
 
