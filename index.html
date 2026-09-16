@@ -35,7 +35,8 @@
       <div class="drop-zone-icon">📁</div>
       <div class="drop-zone-text">Glissez votre fichier CSV ici ou</div>
       <button class="btn-file">Parcourir les fichiers</button>
-      <input type="file" id="file-input" accept=".csv" onchange="gererFichier Selectionne(this.files[0])">
+      <!-- CORRECTION ICI : gererFichierSelectionne collé -->
+      <input type="file" id="file-input" accept=".csv" onchange="gererFichierSelectionne(this.files[0])">
     </div>
 
     <div id="status-box" class="status-box"></div>
@@ -98,16 +99,14 @@
       reader.readAsText(file, 'UTF-8');
     }
 
-    // Parseur CSV natif robuste gérant les guillemets et séparateurs (virgule ou point-virgule)
     function parserCSV(text) {
       const lignes = text.split(/\r\n|\n/).filter(l => l.trim() !== "");
       if (lignes.length < 2) return [];
 
-      // Détection automatique du séparateur (, ou ;)
       const premiereLigne = lignes[0];
       const separateur = premiereLigne.includes(';') ? ';' : ',';
       
-      const en-tetes = decouperLigne(lignes[0], separateur);
+      const enTetes = decouperLigne(lignes[0], separateur);
       const resultats = [];
 
       for (let i = 1; i < lignes.length; i++) {
@@ -115,7 +114,7 @@
         if (valeurs.length === 0) continue;
         
         const objetLigne = {};
-        en-tetes.forEach((entete, index) => {
+        enTetes.forEach((entete, index) => {
           objetLigne[entete.trim()] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
         });
         resultats.push(objetLigne);
