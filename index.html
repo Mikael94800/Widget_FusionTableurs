@@ -250,6 +250,69 @@
             return [];
         }
 
+        // Sécurité : échappe toute valeur avant insertion dans du HTML.
+        // Les données provenant de Grist ou du CSV sont considérées comme non fiables.
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // Normalisation commune pour les comparaisons de doublons.
+        function normalizeForDuplicate(value) {
+            return String(value ?? '')
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .trim()
+                .replace(/\s+/g, ' ');
+        }
+
+        function getContactEmailValues(record) {
+            const values = [];
+            const addEmails = (value) => {
+                if (value === undefined || value === null || value === '') return;
+                String(value)
+                    .split(/[;,\\n]+/)
+                    .map(v => normalizeForDuplicate(v))
+                    .filter(Boolean)
+                    .forEach(v => values.push(v));
+            };
+            addEmails(record.EMAIL_PRINCIPAL);
+            addEmails(record.EMAILS_SECONDAIRES);
+            return [...new Set(values)];
+        }
+
+        function getContactNameKey(record) {
+            const nom = normalizeForDuplicate(record.NOM);
+            const prenom = normalizeForDuplicate(record.PRENOM);
+            return (nom && prenom) ? `${nom}|${prenom}` : '';
+        }
+
+        function findDuplicateInRecords(candidate, records) {
+            const candidateEmails = getContactEmailValues(candidate);
+            const candidateName = getContactNameKey(candidate);
+
+            for (const record of records) {
+                const recordEmails = getContactEmailValues(record);
+
+                if (candidateEmails.length && recordEmails.length) {
+                    const emailMatch = candidateEmails.some(email => recordEmails.includes(email));
+                    if (emailMatch) {
+                        return { record, reason: "Correspondance email" };
+                    }
+                }
+
+                if (candidateName && candidateName === getContactNameKey(record)) {
+                    return { record, reason: "Correspondance NOM + PRÉNOM" };
+                }
+            }
+            return null;
+        }
+
         async function preloadReferenceTables() {
             try {
                 const tables = await grist.docApi.listTables();
@@ -285,6 +348,19 @@
         }
 
         async function processFile(file) {
+            if (!file) return;
+
+            const maxSize = 10 * 1024 * 1024; // 10 Mo
+            if (file.size > maxSize) {
+                alert("Le fichier est trop volumineux. La taille maximale autorisée est de 10 Mo.");
+                return;
+            }
+
+            if (file.name && !/\.csv$/i.test(file.name)) {
+                alert("Veuillez sélectionner un fichier CSV (.csv).");
+                return;
+            }
+
             await preloadReferenceTables();
             const reader = new FileReader();
             reader.onload = function(e) {
@@ -572,6 +648,7 @@
 
                 detectedDuplicates = [];
                 const recordsToInsert = [];
+                const recordsSeenInImport = [];
 
                 parsedData.forEach(row => {
                     const newRecord = {};
@@ -600,33 +677,37 @@
                         if (tagIds.length > 0) newRecord[colName] = ['L', ...tagIds];
                     }
 
-                    const emailP = newRecord.EMAIL_PRINCIPAL ? newRecord.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
-                    const emailS = newRecord.EMAILS_SECONDAIRES ? newRecord.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
-                    const nomContact = newRecord.NOM ? newRecord.NOM.toString().toLowerCase().trim() : "";
+                    // Recherche d'un doublon dans CONTACTS existants.
+                    // Le NOM seul n'est plus suffisant : NOM + PRÉNOM est requis.
+                    const existingMatch = findDuplicateInRecords(newRecord, existingContacts);
 
-                    let matchFound = null;
-                    let matchReason = "";
+                    // On mémorise toutes les lignes déjà rencontrées, y compris celles
+                    // qui sont elles-mêmes en doublon avec Grist.
+                    const internalMatch = findDuplicateInRecords(newRecord, recordsSeenInImport);
+                    recordsSeenInImport.push(newRecord);
 
-                    for (const ec of existingContacts) {
-                        const ecEmailP = ec.EMAIL_PRINCIPAL ? ec.EMAIL_PRINCIPAL.toString().toLowerCase().trim() : "";
-                        const ecEmailS = ec.EMAILS_SECONDAIRES ? ec.EMAILS_SECONDAIRES.toString().toLowerCase().trim() : "";
-                        const ecNom = ec.NOM ? ec.NOM.toString().toLowerCase().trim() : "";
-
-                        if ((emailP && (emailP === ecEmailP || emailP === ecEmailS)) || 
-                            (emailS && (emailS === ecEmailP || emailS === ecEmailS))) {
-                            matchFound = ec;
-                            matchReason = "Correspondance email";
-                            break;
-                        } else if (nomContact && nomContact === ecNom) {
-                            matchFound = ec;
-                            matchReason = "Correspondance NOM";
-                        }
-                    }
-
-                    if (matchFound) {
-                        detectedDuplicates.push({ imported: newRecord, existing: matchFound, reason: matchReason });
+                    if (existingMatch) {
+                        detectedDuplicates.push({
+                            imported: newRecord,
+                            existing: existingMatch.record,
+                            reason: existingMatch.reason,
+                            source: "grist"
+                        });
                     } else {
-                        recordsToInsert.push(newRecord);
+                        // Recherche également d'un doublon déjà rencontré dans le fichier
+                        // courant. Cela évite de créer deux fiches identiques lors d'un même import.
+                        if (internalMatch) {
+                            detectedDuplicates.push({
+                                imported: newRecord,
+                                existing: internalMatch.record,
+                                reason: internalMatch.reason === "Correspondance email"
+                                    ? "Doublon dans le fichier (email)"
+                                    : "Doublon dans le fichier (NOM + PRÉNOM)",
+                                source: "import"
+                            });
+                        } else {
+                            recordsToInsert.push(newRecord);
+                        }
                     }
                 });
 
@@ -641,7 +722,8 @@
                 const reportSection = document.getElementById('report-section');
                 reportSection.classList.remove('hidden');
 
-                document.getElementById('report-summary').innerText = `Import initial terminé : ${recordsToInsert.length} contacts ajoutés.`;
+                document.getElementById('report-summary').innerText =
+                    `Import initial terminé : ${recordsToInsert.length} contacts ajoutés.`;
                 document.getElementById('report-summary').style.color = "var(--success)";
 
                 if (detectedDuplicates.length > 0) {
@@ -668,6 +750,7 @@
 
         function renderCurrentDuplicate() {
             const wrapper = document.getElementById('duplicate-resolver-wrapper');
+
             if (currentDuplicateIndex >= detectedDuplicates.length) {
                 wrapper.innerHTML = `<div style="background: #ecfdf5; border: 1px solid var(--success); padding: 20px; border-radius: 8px; color: #065f46; text-align:center; font-weight: 600;">
                     Tous les doublons ont été traités avec succès !
@@ -678,10 +761,15 @@
             const item = detectedDuplicates[currentDuplicateIndex];
             const ext = item.existing;
             const imp = item.imported;
+            const isInternal = item.source === "import";
 
             let mergedEmailSec = ext.EMAILS_SECONDAIRES || "";
-            if (imp.EMAIL_PRINCIPAL && imp.EMAIL_PRINCIPAL !== ext.EMAIL_PRINCIPAL && !mergedEmailSec.includes(imp.EMAIL_PRINCIPAL)) {
-                mergedEmailSec = mergedEmailSec ? mergedEmailSec + ", " + imp.EMAIL_PRINCIPAL : imp.EMAIL_PRINCIPAL;
+            if (imp.EMAIL_PRINCIPAL &&
+                normalizeForDuplicate(imp.EMAIL_PRINCIPAL) !== normalizeForDuplicate(ext.EMAIL_PRINCIPAL) &&
+                !mergedEmailSec.includes(imp.EMAIL_PRINCIPAL)) {
+                mergedEmailSec = mergedEmailSec
+                    ? mergedEmailSec + ", " + imp.EMAIL_PRINCIPAL
+                    : imp.EMAIL_PRINCIPAL;
             }
 
             const extTelSec = ext.Telephones_Secondaires || ext.Téléphones_Secondaires || "";
@@ -689,83 +777,207 @@
             const extTelPrin = ext.Telephone_Principal || ext.Téléphone_Principal || "";
 
             let mergedTelSec = extTelSec;
-            if (impTelPrin && impTelPrin !== extTelPrin && !mergedTelSec.includes(impTelPrin)) {
-                mergedTelSec = mergedTelSec ? mergedTelSec + ", " + impTelPrin : impTelPrin;
+            if (impTelPrin &&
+                normalizeForDuplicate(impTelPrin) !== normalizeForDuplicate(extTelPrin) &&
+                !mergedTelSec.includes(impTelPrin)) {
+                mergedTelSec = mergedTelSec
+                    ? mergedTelSec + ", " + impTelPrin
+                    : impTelPrin;
             }
 
             const mergedAdresse = ext.Adresse || imp.Adresse || "";
             const mergedNOMStruct = ext.NOM_Structure || imp.NOM_Structure || "";
             let mergedComment = ext.Commentaire_Description || "";
-            if (imp.Commentaire_Description && imp.Commentaire_Description !== ext.Commentaire_Description) {
-                mergedComment = mergedComment ? mergedComment + "\n---\n" + imp.Commentaire_Description : imp.Commentaire_Description;
+            if (imp.Commentaire_Description &&
+                imp.Commentaire_Description !== ext.Commentaire_Description) {
+                mergedComment = mergedComment
+                    ? mergedComment + "\n---\n" + imp.Commentaire_Description
+                    : imp.Commentaire_Description;
             }
 
             const createSelectOptionsFromCache = (itemsList, currentId) => {
                 let html = `<option value="">-- Aucun --</option>`;
                 itemsList.forEach(itemObj => {
-                    const selected = (parseInt(itemObj.id, 10) === parseInt(currentId, 10)) ? 'selected' : '';
-                    html += `<option value="${itemObj.id}" ${selected}>${itemObj.label}</option>`;
+                    const selected = (parseInt(itemObj.id, 10) === parseInt(currentId, 10))
+                        ? 'selected'
+                        : '';
+                    html += `<option value="${escapeHtml(itemObj.id)}" ${selected}>${escapeHtml(itemObj.label)}</option>`;
                 });
                 return html;
             };
 
+            const sourceLabel = isInternal
+                ? "Doublon détecté dans le fichier importé"
+                : "Doublon détecté avec une fiche Grist existante";
+
+            const existingTitle = isInternal
+                ? "Première occurrence du fichier"
+                : "Fiche Existante (Grist)";
+
+            const idLine = isInternal
+                ? "Cette fiche provient du même fichier d'import."
+                : `ID Fiche Grist : ${escapeHtml(ext.id)}`;
+
             wrapper.innerHTML = `
                 <div class="duplicate-resolver-container">
                     <div class="resolver-header">
-                        <span>Doublon ${currentDuplicateIndex + 1} sur ${detectedDuplicates.length} (Motif : ${item.reason})</span>
-                        <span style="font-size: 0.85rem; font-weight: normal;">ID Fiche Grist : ${ext.id}</span>
+                        <span>
+                            Doublon ${currentDuplicateIndex + 1} sur ${detectedDuplicates.length}
+                            (Motif : ${escapeHtml(item.reason)})
+                        </span>
+                        <span style="font-size: 0.85rem; font-weight: normal;">
+                            ${idLine}
+                        </span>
                     </div>
 
+                    <p style="margin: 0 0 15px 0; font-size: 0.9rem; color: #92400e;">
+                        ${escapeHtml(sourceLabel)}
+                    </p>
+
                     <div class="resolver-grid">
-                        <!-- Fiche Existante en Lecture seule -->
                         <div class="resolver-column">
-                            <h4>Fiche Existante (Grist)</h4>
-                            <div class="form-group"><label>Nom / Prénom</label><input type="text" disabled value="${ext.NOM || ''} ${ext.PRENOM || ''}"></div>
-                            <div class="form-group"><label>Email Principal</label><input type="text" disabled value="${ext.EMAIL_PRINCIPAL || ''}"></div>
-                            <div class="form-group"><label>Téléphone Principal</label><input type="text" disabled value="${extTelPrin}"></div>
-                            <div class="form-group"><label>Nom Structure</label><input type="text" disabled value="${ext.NOM_Structure || ''}"></div>
-                            <div class="form-group"><label>Commentaire</label><textarea disabled>${ext.Commentaire_Description || ''}</textarea></div>
+                            <h4>${escapeHtml(existingTitle)}</h4>
+                            <div class="form-group">
+                                <label>Nom / Prénom</label>
+                                <input type="text" disabled value="${escapeHtml(`${ext.NOM || ''} ${ext.PRENOM || ''}`)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Email Principal</label>
+                                <input type="text" disabled value="${escapeHtml(ext.EMAIL_PRINCIPAL || '')}">
+                            </div>
+                            <div class="form-group">
+                                <label>Téléphone Principal</label>
+                                <input type="text" disabled value="${escapeHtml(extTelPrin)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Nom Structure</label>
+                                <input type="text" disabled value="${escapeHtml(ext.NOM_Structure || '')}">
+                            </div>
+                            <div class="form-group">
+                                <label>Commentaire</label>
+                                <textarea disabled>${escapeHtml(ext.Commentaire_Description || '')}</textarea>
+                            </div>
                         </div>
 
-                        <!-- Proposition Modifiable -->
                         <div class="resolver-column" style="background: #fdfdfd; border-color: var(--primary);">
-                            <h4>Proposition Modifiable (Fusion)</h4>
-                            <div class="form-group"><label>Nom</label><input type="text" id="edit-nom" value="${imp.NOM || ext.NOM || ''}"></div>
-                            <div class="form-group"><label>Prénom</label><input type="text" id="edit-prenom" value="${imp.PRENOM || ext.PRENOM || ''}"></div>
-                            <div class="form-group"><label>Email Principal</label><input type="text" id="edit-emailp" value="${ext.EMAIL_PRINCIPAL || imp.EMAIL_PRINCIPAL || ''}"></div>
-                            <div class="form-group"><label>Emails Secondaires</label><input type="text" id="edit-emails" value="${mergedEmailSec}"></div>
-                            <div class="form-group"><label>Téléphone Principal</label><input type="text" id="edit-telp" value="${extTelPrin || impTelPrin}"></div>
-                            <div class="form-group"><label>Nom Structure</label><input type="text" id="edit-nomstruct" value="${mergedNOMStruct}"></div>
-                            <div class="form-group"><label>Adresse</label><input type="text" id="edit-adresse" value="${mergedAdresse}"></div>
-                            
+                            <h4>Proposition issue du fichier importé</h4>
+
+                            <div class="form-group">
+                                <label>Nom</label>
+                                <input type="text" id="edit-nom" value="${escapeHtml(imp.NOM || ext.NOM || '')}">
+                            </div>
+                            <div class="form-group">
+                                <label>Prénom</label>
+                                <input type="text" id="edit-prenom" value="${escapeHtml(imp.PRENOM || ext.PRENOM || '')}">
+                            </div>
+                            <div class="form-group">
+                                <label>Email Principal</label>
+                                <input type="text" id="edit-emailp" value="${escapeHtml(ext.EMAIL_PRINCIPAL || imp.EMAIL_PRINCIPAL || '')}">
+                            </div>
+                            <div class="form-group">
+                                <label>Emails Secondaires</label>
+                                <input type="text" id="edit-emails" value="${escapeHtml(mergedEmailSec)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Téléphone Principal</label>
+                                <input type="text" id="edit-telp" value="${escapeHtml(extTelPrin || impTelPrin)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Nom Structure</label>
+                                <input type="text" id="edit-nomstruct" value="${escapeHtml(mergedNOMStruct)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Adresse</label>
+                                <input type="text" id="edit-adresse" value="${escapeHtml(mergedAdresse)}">
+                            </div>
+
                             <div class="form-group">
                                 <label>Type de Structure</label>
-                                <select id="edit-typestruct">${createSelectOptionsFromCache(refCaches.typeStruct, ext.TYPE_DE_STRUCTURE_CONTACT)}</select>
+                                <select id="edit-typestruct">
+                                    ${createSelectOptionsFromCache(refCaches.typeStruct, ext.TYPE_DE_STRUCTURE_CONTACT)}
+                                </select>
                             </div>
+
                             <div class="form-group">
                                 <label>Domaine d'activités</label>
-                                <select id="edit-domaine">${createSelectOptionsFromCache(refCaches.domaine, ext.DOMAINE_D_ACTIVITES)}</select>
+                                <select id="edit-domaine">
+                                    ${createSelectOptionsFromCache(refCaches.domaine, ext.DOMAINE_D_ACTIVITES)}
+                                </select>
                             </div>
+
                             <div class="form-group">
                                 <label>Statut juridique</label>
-                                <select id="edit-statut">${createSelectOptionsFromCache(refCaches.statutJur, ext.STATUT_JURIDIQUE)}</select>
+                                <select id="edit-statut">
+                                    ${createSelectOptionsFromCache(refCaches.statutJur, ext.STATUT_JURIDIQUE)}
+                                </select>
                             </div>
-                            <div class="form-group"><label>Commentaire</label><textarea id="edit-commentaire">${mergedComment}</textarea></div>
+
+                            <div class="form-group">
+                                <label>Commentaire</label>
+                                <textarea id="edit-commentaire">${escapeHtml(mergedComment)}</textarea>
+                            </div>
                         </div>
                     </div>
 
                     <div class="resolver-actions">
-                        <button class="btn btn-danger" onclick="resolveDuplicate('ignore_import')">🗑️ Ignorer l'import (Garder Grist)</button>
-                        <button class="btn btn-warning-alt" onclick="resolveDuplicate('delete_grist_and_import')">❌ Supprimer Grist & Importer le nouveau</button>
-                        <button class="btn btn-success" onclick="resolveDuplicate('validate_fusion')">✅ Valider la fusion (Mettre à jour Grist)</button>
+                        <button class="btn btn-danger"
+                                onclick="resolveDuplicate('ignore_import')">
+                            🗑️ Ignorer le fichier
+                        </button>
+
+                        <button class="btn btn-secondary"
+                                onclick="resolveDuplicate('import_keep_existing')">
+                            📥 Importer + conserver l'existant
+                        </button>
+
+                        ${isInternal ? '' : `
+                        <button class="btn btn-warning-alt"
+                                onclick="resolveDuplicate('delete_grist_and_import')">
+                            ❌ Remplacer l'existant
+                        </button>
+
+                        <button class="btn btn-success"
+                                onclick="resolveDuplicate('validate_fusion')">
+                            🔄 Fusionner avec l'existant
+                        </button>
+                        `}
                     </div>
+
+                    <p style="margin: 12px 0 0; font-size: 0.8rem; color: var(--text-muted);">
+                        « Importer + conserver l'existant » crée une nouvelle fiche sans modifier la fiche actuellement conservée.
+                    </p>
                 </div>
             `;
         }
 
         async function resolveDuplicate(action) {
             const item = detectedDuplicates[currentDuplicateIndex];
+
             try {
+                // Cas spécifique aux doublons trouvés dans le fichier lui-même :
+                // aucune fiche Grist n'est supprimée ou modifiée.
+                if (action === 'ignore_import') {
+                    currentDuplicateIndex++;
+                    renderCurrentDuplicate();
+                    return;
+                }
+
+                if (action === 'import_keep_existing') {
+                    await grist.docApi.applyUserActions([
+                        ['AddRecord', 'CONTACTS', null, item.imported]
+                    ]);
+
+                    currentDuplicateIndex++;
+                    renderCurrentDuplicate();
+                    return;
+                }
+
+                // Les opérations ci-dessous ne concernent que les doublons
+                // avec une fiche déjà présente dans CONTACTS.
+                if (item.source === "import") {
+                    throw new Error("Cette opération n'est pas disponible pour un doublon interne au fichier.");
+                }
+
                 if (action === 'validate_fusion') {
                     const rawTypeStruct = document.getElementById('edit-typestruct').value;
                     const rawDomaine = document.getElementById('edit-domaine').value;
@@ -788,7 +1000,7 @@
                     await grist.docApi.applyUserActions([
                         ['UpdateRecord', 'CONTACTS', item.existing.id, updatedFields]
                     ]);
-                } 
+                }
                 else if (action === 'delete_grist_and_import') {
                     const rawTypeStruct = document.getElementById('edit-typestruct').value;
                     const rawDomaine = document.getElementById('edit-domaine').value;
@@ -818,7 +1030,7 @@
                 currentDuplicateIndex++;
                 renderCurrentDuplicate();
             } catch (err) {
-                alert("Erreur lors de la résolution du doublon : " + err.message);
+                alert("Erreur lors de la résolution du doublon : " + (err.message || err));
             }
         }
     </script>
