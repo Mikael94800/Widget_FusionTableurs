@@ -142,12 +142,12 @@
 
         .resolver-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }
 
-        @media (max-width: 768px) { .resolver-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 1050px) { .resolver-grid { grid-template-columns: 1fr; } }
 
         .resolver-column {
             background: white;
@@ -178,7 +178,36 @@
             background: #fff;
         }
         .form-group textarea { resize: vertical; height: 60px; }
+        .fusion-preview-column { background: #f0fdf4; border-color: var(--success); }
+        .fusion-preview-column h4 { color: #065f46; }
+        .fusion-preview-column input, .fusion-preview-column textarea { background: #ecfdf5; }
+        .fusion-preview-note { margin: -2px 0 12px 0; font-size: 0.78rem; color: #047857; line-height: 1.35; }
         .resolver-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+
+        .import-final-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 18px;
+            padding: 15px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #f8fafc;
+        }
+
+        .btn-cancel-import {
+            background-color: #64748b;
+            color: white;
+        }
+        .btn-cancel-import:hover { background-color: #475569; }
+
+        .btn-commit-import {
+            background-color: var(--success);
+            color: white;
+        }
+        .btn-commit-import:hover { background-color: var(--success-hover); }
     </style>
 </head>
 <body>
@@ -209,8 +238,15 @@
             </div>
 
             <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-                <button id="btnImport" class="btn" onclick="executeImport()">Lancer l'intégration</button>
+                <button id="btnImport" class="btn" onclick="executeImport()">Préparer l'import</button>
                 <div id="status-container"><span id="status-msg"></span></div>
+            </div>
+
+            <div class="import-final-actions">
+                <div style="font-size: 0.85rem; color: var(--text-muted);">
+                    Aucune modification de Grist n'est effectuée à cette étape. L'import sera enregistré uniquement après votre validation finale.
+                </div>
+                <button type="button" class="btn btn-cancel-import" onclick="cancelImport()">↩ Annuler l'import en cours</button>
             </div>
         </div>
 
@@ -231,6 +267,9 @@
         let csvHeaders = [];
         let detectedDuplicates = [];
         let currentDuplicateIndex = 0;
+        let pendingInitialRecords = [];
+        let pendingResolutionActions = [];
+        let importInProgress = false;
         let actualEtiquettesTableName = "ETIQUETTES";
         let refCaches = { domaine: [], typeStruct: [], statutJur: [] };
 
@@ -616,7 +655,7 @@
             });
 
             if (Object.keys(mapping).length === 0) {
-                alert("Veuillez associer au moins une colonne avant d'importer.");
+                alert("Veuillez associer au moins une colonne avant de préparer l'import.");
                 return;
             }
 
@@ -630,7 +669,7 @@
 
             const btn = document.getElementById('btnImport');
             btn.disabled = true;
-            document.getElementById('status-msg').innerText = "Analyse et import initial...";
+            document.getElementById('status-msg').innerText = "Analyse de l'import en cours...";
 
             try {
                 const rawExisting = await grist.docApi.fetchTable('CONTACTS');
@@ -647,7 +686,9 @@
                 };
 
                 detectedDuplicates = [];
-                const recordsToInsert = [];
+                pendingInitialRecords = [];
+                pendingResolutionActions = [];
+                importInProgress = true;
                 const recordsSeenInImport = [];
 
                 parsedData.forEach(row => {
@@ -677,12 +718,7 @@
                         if (tagIds.length > 0) newRecord[colName] = ['L', ...tagIds];
                     }
 
-                    // Recherche d'un doublon dans CONTACTS existants.
-                    // Le NOM seul n'est plus suffisant : NOM + PRÉNOM est requis.
                     const existingMatch = findDuplicateInRecords(newRecord, existingContacts);
-
-                    // On mémorise toutes les lignes déjà rencontrées, y compris celles
-                    // qui sont elles-mêmes en doublon avec Grist.
                     const internalMatch = findDuplicateInRecords(newRecord, recordsSeenInImport);
                     recordsSeenInImport.push(newRecord);
 
@@ -693,51 +729,174 @@
                             reason: existingMatch.reason,
                             source: "grist"
                         });
+                    } else if (internalMatch) {
+                        detectedDuplicates.push({
+                            imported: newRecord,
+                            existing: internalMatch.record,
+                            reason: internalMatch.reason === "Correspondance email"
+                                ? "Doublon dans le fichier (email)"
+                                : "Doublon dans le fichier (NOM + PRÉNOM)",
+                            source: "import"
+                        });
                     } else {
-                        // Recherche également d'un doublon déjà rencontré dans le fichier
-                        // courant. Cela évite de créer deux fiches identiques lors d'un même import.
-                        if (internalMatch) {
-                            detectedDuplicates.push({
-                                imported: newRecord,
-                                existing: internalMatch.record,
-                                reason: internalMatch.reason === "Correspondance email"
-                                    ? "Doublon dans le fichier (email)"
-                                    : "Doublon dans le fichier (NOM + PRÉNOM)",
-                                source: "import"
-                            });
-                        } else {
-                            recordsToInsert.push(newRecord);
-                        }
+                        pendingInitialRecords.push(newRecord);
                     }
                 });
-
-                const batchSize = 100;
-                for (let i = 0; i < recordsToInsert.length; i += batchSize) {
-                    const batch = recordsToInsert.slice(i, i + batchSize);
-                    const actions = batch.map(record => ['AddRecord', 'CONTACTS', null, record]);
-                    await grist.docApi.applyUserActions(actions);
-                }
 
                 document.getElementById('mapping-section').classList.add('hidden');
                 const reportSection = document.getElementById('report-section');
                 reportSection.classList.remove('hidden');
 
                 document.getElementById('report-summary').innerText =
-                    `Import initial terminé : ${recordsToInsert.length} contacts ajoutés.`;
+                    `Analyse terminée : ${pendingInitialRecords.length} contacts prêts à être ajoutés.`;
                 document.getElementById('report-summary').style.color = "var(--success)";
 
                 if (detectedDuplicates.length > 0) {
                     document.getElementById('dup-count').innerText = detectedDuplicates.length;
                     document.getElementById('duplicate-trigger-container').classList.remove('hidden');
+                    document.getElementById('status-msg').innerText =
+                        "Analyse terminée. Aucun changement n'a encore été enregistré dans Grist.";
                 } else {
                     document.getElementById('report-summary').innerText += " Aucun doublon détecté.";
+                    showFinalImportActions();
+                    document.getElementById('status-msg').innerText =
+                        "Analyse terminée. Aucun changement n'a encore été enregistré dans Grist.";
                 }
 
-            } catch (err) {
-                alert("Échec de l'importation : " + (err.message || JSON.stringify(err)));
                 btn.disabled = false;
-                document.getElementById('status-msg').innerText = "Échec.";
+            } catch (err) {
+                alert("Échec de l'analyse de l'import : " + (err.message || JSON.stringify(err)));
+                btn.disabled = false;
+                importInProgress = false;
+                document.getElementById('status-msg').innerText = "Échec de l'analyse.";
             }
+        }
+
+        function showFinalImportActions() {
+            const reportSection = document.getElementById('report-section');
+            let actions = document.getElementById('final-import-actions');
+            if (!actions) {
+                actions = document.createElement('div');
+                actions.id = 'final-import-actions';
+                actions.className = 'import-final-actions';
+                reportSection.appendChild(actions);
+            }
+
+            actions.innerHTML = `
+                <div style="font-size: 0.9rem; color: var(--text-main);">
+                    <strong>Import prêt à être enregistré.</strong><br>
+                    ${detectedDuplicates.length > 0 ? 'Tous les doublons ont été traités. ' : ''}Aucune modification n'a encore été envoyée à Grist.
+                </div>
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-cancel-import" onclick="cancelImport()">↩ Annuler l'import en cours</button>
+                    <button type="button" class="btn btn-commit-import" onclick="commitImport()">✓ Valider définitivement l'import</button>
+                </div>
+            `;
+        }
+
+        async function commitImport() {
+            if (!importInProgress) return;
+
+            const actions = [];
+
+            pendingInitialRecords.forEach(record => {
+                actions.push(['AddRecord', 'CONTACTS', null, record]);
+            });
+
+            pendingResolutionActions.forEach(action => {
+                actions.push(action);
+            });
+
+            if (actions.length === 0) {
+                importInProgress = false;
+                showImportCompleted(0);
+                return;
+            }
+
+            const commitButtons = document.querySelectorAll('.btn-commit-import');
+            commitButtons.forEach(button => button.disabled = true);
+            document.getElementById('status-msg').innerText =
+                "Validation finale en cours...";
+
+            try {
+                // Point essentiel de la V4 : un seul appel à Grist pour toute la validation.
+                // Tant que cet appel n'est pas lancé, aucune modification n'est écrite dans CONTACTS.
+                await grist.docApi.applyUserActions(actions);
+
+                const addedCount = pendingInitialRecords.length +
+                    pendingResolutionActions.filter(a => a[0] === 'AddRecord').length;
+
+                importInProgress = false;
+                showImportCompleted(addedCount);
+            } catch (err) {
+                commitButtons.forEach(button => button.disabled = false);
+                document.getElementById('status-msg').innerText = "Échec de la validation finale.";
+                alert(
+                    "La validation finale de l'import a échoué.\n\n" +
+                    "Aucune nouvelle tentative automatique n'a été effectuée. " +
+                    "Vérifiez l'état de Grist avant de relancer l'import.\n\n" +
+                    (err.message || err)
+                );
+            }
+        }
+
+        function showImportCompleted(addedCount) {
+            const reportSection = document.getElementById('report-section');
+            const finalActions = document.getElementById('final-import-actions');
+            if (finalActions) finalActions.remove();
+
+            const wrapper = document.getElementById('duplicate-resolver-wrapper');
+            wrapper.classList.remove('hidden');
+            wrapper.innerHTML = `
+                <div style="background: #ecfdf5; border: 1px solid var(--success); padding: 20px; border-radius: 8px; color: #065f46; text-align:center; font-weight: 600;">
+                    ✓ Import définitivement validé.<br>
+                    <span style="font-size:0.9rem; font-weight:normal;">${addedCount} fiche(s) ajoutée(s) ou recréée(s). Les modifications ont été envoyées à Grist en une seule validation.</span>
+                </div>
+            `;
+            document.getElementById('report-summary').innerText =
+                `Import définitivement validé : ${addedCount} fiche(s) ajoutée(s) ou recréée(s).`;
+            document.getElementById('report-summary').style.color = "var(--success)";
+            document.getElementById('status-msg').innerText = "Import terminé.";
+        }
+
+        function cancelImport() {
+            if (!importInProgress) {
+                resetImportInterface();
+                return;
+            }
+
+            const confirmed = confirm(
+                "Annuler l'import en cours ?\n\n" +
+                "Aucune des modifications préparées ne sera enregistrée dans Grist."
+            );
+            if (!confirmed) return;
+
+            importInProgress = false;
+            pendingInitialRecords = [];
+            pendingResolutionActions = [];
+            detectedDuplicates = [];
+            currentDuplicateIndex = 0;
+            resetImportInterface();
+        }
+
+        function resetImportInterface() {
+            document.getElementById('mapping-section').classList.add('hidden');
+            document.getElementById('report-section').classList.add('hidden');
+            document.getElementById('duplicate-resolver-wrapper').classList.add('hidden');
+            document.getElementById('duplicate-trigger-container').classList.add('hidden');
+            const finalActions = document.getElementById('final-import-actions');
+            if (finalActions) finalActions.remove();
+            document.getElementById('upload-section').classList.remove('hidden');
+            document.getElementById('status-msg').innerText = "";
+            const btn = document.getElementById('btnImport');
+            btn.disabled = false;
+            const fileInput = document.getElementById('csvFile');
+            if (fileInput) fileInput.value = '';
+            parsedData = [];
+            csvHeaders = [];
+            pendingInitialRecords = [];
+            pendingResolutionActions = [];
+            detectedDuplicates = [];
         }
 
         async function startResolvingDuplicates() {
@@ -753,8 +912,12 @@
 
             if (currentDuplicateIndex >= detectedDuplicates.length) {
                 wrapper.innerHTML = `<div style="background: #ecfdf5; border: 1px solid var(--success); padding: 20px; border-radius: 8px; color: #065f46; text-align:center; font-weight: 600;">
-                    Tous les doublons ont été traités avec succès !
+                    Tous les doublons ont été traités.
+                    <div style="font-size:0.9rem; font-weight:normal; margin-top:8px;">
+                        Aucune modification n'a encore été enregistrée dans Grist.
+                    </div>
                 </div>`;
+                showFinalImportActions();
                 return;
             }
 
@@ -794,6 +957,19 @@
                     ? mergedComment + "\n---\n" + imp.Commentaire_Description
                     : imp.Commentaire_Description;
             }
+
+            // Valeurs utilisées pour la prévisualisation de la fusion.
+            // Elles correspondent aux valeurs proposées par la fiche importée
+            // lorsque celle-ci contient une information, sinon à l'existant.
+            const fusionNom = imp.NOM || ext.NOM || "";
+            const fusionPrenom = imp.PRENOM || ext.PRENOM || "";
+            const fusionEmailP = imp.EMAIL_PRINCIPAL || ext.EMAIL_PRINCIPAL || "";
+            const fusionTelP = impTelPrin || extTelPrin || "";
+            const fusionNomStruct = imp.NOM_Structure || ext.NOM_Structure || "";
+            const fusionAdresse = imp.Adresse || ext.Adresse || "";
+            const fusionTypeStruct = imp.TYPE_DE_STRUCTURE_CONTACT || ext.TYPE_DE_STRUCTURE_CONTACT || "";
+            const fusionDomaine = imp.DOMAINE_D_ACTIVITES || ext.DOMAINE_D_ACTIVITES || "";
+            const fusionStatut = imp.STATUT_JURIDIQUE || ext.STATUT_JURIDIQUE || "";
 
             const createSelectOptionsFromCache = (itemsList, currentId) => {
                 let html = `<option value="">-- Aucun --</option>`;
@@ -894,27 +1070,73 @@
                             <div class="form-group">
                                 <label>Type de Structure</label>
                                 <select id="edit-typestruct">
-                                    ${createSelectOptionsFromCache(refCaches.typeStruct, ext.TYPE_DE_STRUCTURE_CONTACT)}
+                                    ${createSelectOptionsFromCache(refCaches.typeStruct, imp.TYPE_DE_STRUCTURE_CONTACT || ext.TYPE_DE_STRUCTURE_CONTACT)}
                                 </select>
                             </div>
 
                             <div class="form-group">
                                 <label>Domaine d'activités</label>
                                 <select id="edit-domaine">
-                                    ${createSelectOptionsFromCache(refCaches.domaine, ext.DOMAINE_D_ACTIVITES)}
+                                    ${createSelectOptionsFromCache(refCaches.domaine, imp.DOMAINE_D_ACTIVITES || ext.DOMAINE_D_ACTIVITES)}
                                 </select>
                             </div>
 
                             <div class="form-group">
                                 <label>Statut juridique</label>
                                 <select id="edit-statut">
-                                    ${createSelectOptionsFromCache(refCaches.statutJur, ext.STATUT_JURIDIQUE)}
+                                    ${createSelectOptionsFromCache(refCaches.statutJur, imp.STATUT_JURIDIQUE || ext.STATUT_JURIDIQUE)}
                                 </select>
                             </div>
 
                             <div class="form-group">
                                 <label>Commentaire</label>
                                 <textarea id="edit-commentaire">${escapeHtml(mergedComment)}</textarea>
+                            </div>
+                        </div>
+
+                        <div class="resolver-column fusion-preview-column">
+                            <h4>Proposition de fiche fusionnée</h4>
+                            <p class="fusion-preview-note">Cette colonne montre le résultat qui sera conservé si vous choisissez « Fusionner avec l'existant ».</p>
+
+                            <div class="form-group">
+                                <label>Nom / Prénom</label>
+                                <input type="text" id="fusion-nom-prenom" disabled value="${escapeHtml(`${fusionNom} ${fusionPrenom}`.trim())}">
+                            </div>
+                            <div class="form-group">
+                                <label>Email Principal</label>
+                                <input type="text" id="fusion-emailp" disabled value="${escapeHtml(fusionEmailP)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Emails Secondaires</label>
+                                <input type="text" id="fusion-emails" disabled value="${escapeHtml(mergedEmailSec)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Téléphone Principal</label>
+                                <input type="text" id="fusion-telp" disabled value="${escapeHtml(fusionTelP)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Nom Structure</label>
+                                <input type="text" id="fusion-nomstruct" disabled value="${escapeHtml(fusionNomStruct)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Adresse</label>
+                                <input type="text" id="fusion-adresse" disabled value="${escapeHtml(fusionAdresse)}">
+                            </div>
+                            <div class="form-group">
+                                <label>Type de Structure</label>
+                                <input type="text" id="fusion-typestruct" disabled value="${escapeHtml(refCaches.typeStruct.find(x => String(x.id) === String(fusionTypeStruct))?.label || '')}">
+                            </div>
+                            <div class="form-group">
+                                <label>Domaine d'activités</label>
+                                <input type="text" id="fusion-domaine" disabled value="${escapeHtml(refCaches.domaine.find(x => String(x.id) === String(fusionDomaine))?.label || '')}">
+                            </div>
+                            <div class="form-group">
+                                <label>Statut juridique</label>
+                                <input type="text" id="fusion-statut" disabled value="${escapeHtml(refCaches.statutJur.find(x => String(x.id) === String(fusionStatut))?.label || '')}">
+                            </div>
+                            <div class="form-group">
+                                <label>Commentaire</label>
+                                <textarea id="fusion-commentaire" disabled>${escapeHtml(mergedComment)}</textarea>
                             </div>
                         </div>
                     </div>
@@ -941,6 +1163,11 @@
                             🔄 Fusionner avec l'existant
                         </button>
                         `}
+
+                        <button class="btn btn-cancel-import"
+                                onclick="cancelImport()">
+                            ↩ Annuler l'import en cours
+                        </button>
                     </div>
 
                     <p style="margin: 12px 0 0; font-size: 0.8rem; color: var(--text-muted);">
@@ -948,14 +1175,53 @@
                     </p>
                 </div>
             `;
+
+            attachFusionPreviewListeners();
+        }
+
+        function updateFusionPreview() {
+            const get = id => document.getElementById(id)?.value || '';
+            const set = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.value = value;
+            };
+
+            set('fusion-nom-prenom', `${get('edit-nom')} ${get('edit-prenom')}`.trim());
+            set('fusion-emailp', get('edit-emailp'));
+            set('fusion-emails', get('edit-emails'));
+            set('fusion-telp', get('edit-telp'));
+            set('fusion-nomstruct', get('edit-nomstruct'));
+            set('fusion-adresse', get('edit-adresse'));
+            set('fusion-commentaire', get('edit-commentaire'));
+
+            const updateReferencePreview = (selectId, previewId, cache) => {
+                const selectedId = get(selectId);
+                const found = cache.find(itemObj => String(itemObj.id) === String(selectedId));
+                set(previewId, found ? found.label : '');
+            };
+
+            updateReferencePreview('edit-typestruct', 'fusion-typestruct', refCaches.typeStruct);
+            updateReferencePreview('edit-domaine', 'fusion-domaine', refCaches.domaine);
+            updateReferencePreview('edit-statut', 'fusion-statut', refCaches.statutJur);
+        }
+
+        function attachFusionPreviewListeners() {
+            ['edit-nom', 'edit-prenom', 'edit-emailp', 'edit-emails', 'edit-telp',
+             'edit-nomstruct', 'edit-adresse', 'edit-commentaire', 'edit-typestruct',
+             'edit-domaine', 'edit-statut'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', updateFusionPreview);
+                if (el) el.addEventListener('change', updateFusionPreview);
+            });
+            updateFusionPreview();
         }
 
         async function resolveDuplicate(action) {
             const item = detectedDuplicates[currentDuplicateIndex];
 
             try {
-                // Cas spécifique aux doublons trouvés dans le fichier lui-même :
-                // aucune fiche Grist n'est supprimée ou modifiée.
+                // IMPORTANT : aucune action Grist n'est envoyée ici.
+                // Les décisions sont simplement mémorisées jusqu'à la validation finale.
                 if (action === 'ignore_import') {
                     currentDuplicateIndex++;
                     renderCurrentDuplicate();
@@ -963,17 +1229,14 @@
                 }
 
                 if (action === 'import_keep_existing') {
-                    await grist.docApi.applyUserActions([
-                        ['AddRecord', 'CONTACTS', null, item.imported]
+                    pendingResolutionActions.push([
+                        'AddRecord', 'CONTACTS', null, item.imported
                     ]);
-
                     currentDuplicateIndex++;
                     renderCurrentDuplicate();
                     return;
                 }
 
-                // Les opérations ci-dessous ne concernent que les doublons
-                // avec une fiche déjà présente dans CONTACTS.
                 if (item.source === "import") {
                     throw new Error("Cette opération n'est pas disponible pour un doublon interne au fichier.");
                 }
@@ -997,8 +1260,8 @@
                         Commentaire_Description: document.getElementById('edit-commentaire').value
                     };
 
-                    await grist.docApi.applyUserActions([
-                        ['UpdateRecord', 'CONTACTS', item.existing.id, updatedFields]
+                    pendingResolutionActions.push([
+                        'UpdateRecord', 'CONTACTS', item.existing.id, updatedFields
                     ]);
                 }
                 else if (action === 'delete_grist_and_import') {
@@ -1021,16 +1284,18 @@
                         Commentaire_Description: document.getElementById('edit-commentaire').value
                     };
 
-                    await grist.docApi.applyUserActions([
-                        ['RemoveRecord', 'CONTACTS', item.existing.id],
-                        ['AddRecord', 'CONTACTS', null, finalImportRecord]
+                    pendingResolutionActions.push([
+                        'RemoveRecord', 'CONTACTS', item.existing.id
+                    ]);
+                    pendingResolutionActions.push([
+                        'AddRecord', 'CONTACTS', null, finalImportRecord
                     ]);
                 }
 
                 currentDuplicateIndex++;
                 renderCurrentDuplicate();
             } catch (err) {
-                alert("Erreur lors de la résolution du doublon : " + (err.message || err));
+                alert("Erreur lors de la préparation de la résolution du doublon : " + (err.message || err));
             }
         }
     </script>
