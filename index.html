@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Importateur Intelligent de Contacts</title>
+    <meta name="widget-build" content="CONTACT-IMPORT-2026.11.18-R1">
     <script src="https://grist.numerique.gouv.fr/grist-plugin-api.js"></script>
     <style>
         :root {
@@ -42,6 +43,7 @@
         }
 
         h2 { margin-top: 0; color: var(--text-main); font-size: 1.5rem; margin-bottom: 20px; }
+        .build-indicator { margin-top: 16px; text-align: right; color: #94a3b8; font-size: 0.68rem; letter-spacing: .02em; user-select: none; }
         h3 { font-size: 1.1rem; color: var(--text-main); margin-top: 20px; margin-bottom: 10px; }
 
         .drop-zone {
@@ -267,16 +269,16 @@
 <body>
 
     <div class="container">
-        <h2>Importer un fichier de contacts (.csv)</h2>
+        <h2>Importer un fichier de contacts (CSV / XLSX)</h2>
 
         <div id="upload-section" class="drop-zone" 
              onclick="document.getElementById('csvFile').click()"
              ondragover="handleDragOver(event)"
              ondragleave="handleDragLeave(event)"
              ondrop="handleDrop(event)">
-            <p style="margin: 0 0 10px 0; color: var(--text-muted);">Glissez votre fichier CSV ici ou</p>
+            <p style="margin: 0 0 10px 0; color: var(--text-muted);">Glissez votre fichier CSV ou Excel (.xlsx) ici ou</p>
             <button class="btn" type="button">Parcourir les fichiers</button>
-            <input type="file" id="csvFile" accept=".csv" onchange="handleFileSelect(event)">
+            <input type="file" id="csvFile" accept=".csv,.xlsx" onchange="handleFileSelect(event)">
         </div>
 
         <div id="mapping-section" class="hidden">
@@ -323,9 +325,13 @@
 
             <div id="duplicate-resolver-wrapper" class="hidden"></div>
         </div>
+        <div class="build-indicator" aria-label="Version du widget">Import contacts · 2026.11.18-R1</div>
     </div>
 
     <script>
+        const CONTACT_IMPORT_BUILD = "2026.11.18-R1";
+        console.info(`[Widget CONTACT_IMPORT] Version ${CONTACT_IMPORT_BUILD}`);
+
         let parsedData = [];
         let csvHeaders = [];
         let detectedDuplicates = [];
@@ -335,6 +341,7 @@
         let importInProgress = false;
         let actualEtiquettesTableName = "ETIQUETTES";
         let refCaches = { domaine: [], typeStruct: [], statutJur: [] };
+        let refCachesLoaded = false;
 
         grist.ready({ requiredAccess: 'full' });
 
@@ -414,26 +421,54 @@
         }
 
         async function preloadReferenceTables() {
+            refCachesLoaded = false;
             try {
                 const tables = await grist.docApi.listTables();
-                const foundTable = tables.find(t => t.toLowerCase() === 'etiquettes');
-                if (foundTable) actualEtiquettesTableName = foundTable;
+                const foundTable = tables.find(t => String(t).toLowerCase() === 'etiquettes');
+                if (!foundTable) throw new Error("La table ETIQUETTES est introuvable dans ce document Grist.");
+                actualEtiquettesTableName = foundTable;
 
                 const rawRecords = await grist.docApi.fetchTable(actualEtiquettesTableName);
                 const records = normalizeGristRecords(rawRecords);
+                const makeCache = (column) => records
+                    .filter(r => r[column] !== undefined && r[column] !== null && String(r[column]).trim() !== "")
+                    .map(r => ({ id: r.id, label: String(r[column]).trim() }));
 
-                refCaches.domaine = records.filter(r => r.DOMAINE_D_ACTIVITES !== undefined && r.DOMAINE_D_ACTIVITES !== null && r.DOMAINE_D_ACTIVITES !== "")
-                    .map(r => ({ id: r.id, label: r.DOMAINE_D_ACTIVITES }));
-
-                refCaches.typeStruct = records.filter(r => r.TYPE_DE_STRUCTURE_CONTACT !== undefined && r.TYPE_DE_STRUCTURE_CONTACT !== null && r.TYPE_DE_STRUCTURE_CONTACT !== "")
-                    .map(r => ({ id: r.id, label: r.TYPE_DE_STRUCTURE_CONTACT }));
-
-                refCaches.statutJur = records.filter(r => r.STATUT_JURIDIQUE !== undefined && r.STATUT_JURIDIQUE !== null && r.STATUT_JURIDIQUE !== "")
-                    .map(r => ({ id: r.id, label: r.STATUT_JURIDIQUE }));
-
+                refCaches.domaine = makeCache('DOMAINE_D_ACTIVITES');
+                refCaches.typeStruct = makeCache('TYPE_DE_STRUCTURE_CONTACT');
+                refCaches.statutJur = makeCache('STATUT_JURIDIQUE');
+                refCachesLoaded = true;
+                return true;
             } catch (err) {
+                refCaches = { domaine: [], typeStruct: [], statutJur: [] };
                 console.warn("Tables de référence non chargées :", err);
+                return false;
             }
+        }
+
+        const SINGLE_REFERENCE_COLUMNS = {
+            DOMAINE_D_ACTIVITES: 'domaine',
+            STATUT_JURIDIQUE: 'statutJur',
+            TYPE_DE_STRUCTURE_CONTACT: 'typeStruct'
+        };
+
+        function resolveSingleReferenceValue(column, value) {
+            const cacheName = SINGLE_REFERENCE_COLUMNS[column];
+            const cache = cacheName ? refCaches[cacheName] : null;
+            if (!cache) return { ok: false, reason: 'Référentiel indisponible' };
+
+            const raw = String(value ?? '').trim();
+            if (!raw) return { ok: true, id: null };
+
+            const normalized = normalizeForDuplicate(raw);
+            const labelMatches = cache.filter(item => normalizeForDuplicate(item.label) === normalized);
+            if (labelMatches.length === 1) return { ok: true, id: Number(labelMatches[0].id) };
+            if (labelMatches.length > 1) return { ok: false, reason: 'Libellé présent plusieurs fois dans ETIQUETTES' };
+
+            // Autorise également un identifiant Grist explicite dans le fichier source.
+            const idMatches = cache.filter(item => String(item.id) === raw);
+            if (idMatches.length === 1) return { ok: true, id: Number(idMatches[0].id) };
+            return { ok: false, reason: 'Valeur absente de ETIQUETTES' };
         }
 
         function handleDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('dragover'); }
@@ -466,29 +501,190 @@
                 return;
             }
 
-            if (file.name && !/\.csv$/i.test(file.name)) {
-                alert("Veuillez sélectionner un fichier CSV (.csv).");
+            const fileName = String(file.name || '').toLowerCase();
+            const isCsv = fileName.endsWith('.csv');
+            const isXlsx = fileName.endsWith('.xlsx');
+            if (!isCsv && !isXlsx) {
+                alert("Veuillez sélectionner un fichier CSV (.csv) ou Excel (.xlsx). Les anciens fichiers .xls ne sont pas pris en charge.");
                 return;
             }
 
             await preloadReferenceTables();
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const text = decodeCsvBuffer(e.target.result);
-                    const parsed = parserCSV(text);
-                    csvHeaders = parsed.enTetes;
-                    parsedData = parsed.lignes;
-                    if (parsedData.length === 0) {
-                        alert("Le fichier CSV est vide.");
-                        return;
-                    }
-                    showMappingInterface();
-                } catch (err) {
-                    alert("Erreur de lecture du CSV : " + err.message);
+            try {
+                const buffer = await file.arrayBuffer();
+                let parsed;
+                if (isCsv) {
+                    const text = decodeCsvBuffer(buffer);
+                    parsed = parserCSV(text);
+                } else {
+                    parsed = await parserXLSX(buffer);
                 }
-            };
-            reader.readAsArrayBuffer(file);
+
+                csvHeaders = parsed.enTetes;
+                parsedData = parsed.lignes;
+                if (parsedData.length === 0) {
+                    alert("Le fichier ne contient aucune ligne de données exploitable.");
+                    return;
+                }
+                showMappingInterface();
+            } catch (err) {
+                console.error('Erreur de lecture du fichier importé :', err);
+                alert("Erreur de lecture du fichier : " + (err.message || err));
+            }
+        }
+
+        function rendreEntetesEtLignes(matrix) {
+            const rows = Array.from(matrix || [], row => Array.isArray(row) ? row : []);
+            while (rows.length && rows[0].every(cell => String(cell ?? '').trim() === '')) rows.shift();
+            if (rows.length < 2) return { enTetes: [], lignes: [] };
+
+            const enTetes = [];
+            const occurrences = new Map();
+            rows[0].forEach((cell, index) => {
+                let header = String(cell ?? '').trim();
+                if (!header) header = `Colonne sans nom ${index + 1}`;
+                const base = header;
+                const count = (occurrences.get(base) || 0) + 1;
+                occurrences.set(base, count);
+                if (count > 1) header = `${base} (${count})`;
+                enTetes.push(header);
+            });
+
+            const lignes = [];
+            for (let i = 1; i < rows.length; i++) {
+                const values = rows[i];
+                if (!values.some(cell => String(cell ?? '').trim() !== '')) continue;
+                if (values.length > enTetes.length && values.slice(enTetes.length).some(cell => String(cell ?? '').trim() !== '')) {
+                    throw new Error(`La ligne ${i + 1} contient plus de colonnes que la ligne d’en-tête.`);
+                }
+                const rowObject = {};
+                enTetes.forEach((header, index) => {
+                    const value = values[index];
+                    rowObject[header] = value === undefined || value === null ? '' : String(value).trim();
+                });
+                lignes.push(rowObject);
+            }
+            return { enTetes, lignes };
+        }
+
+        async function parserXLSX(buffer) {
+            if (typeof DecompressionStream === 'undefined') {
+                throw new Error("Ce navigateur ne dispose pas du décompactage nécessaire à la lecture XLSX. Utilisez Firefox ou un navigateur récent, ou importez le fichier en CSV.");
+            }
+
+            const bytes = new Uint8Array(buffer);
+            const view = new DataView(buffer);
+            const decoder = new TextDecoder('utf-8');
+            const readU16 = (offset) => view.getUint16(offset, true);
+            const readU32 = (offset) => view.getUint32(offset, true);
+
+            // Localise le répertoire central ZIP (format interne des fichiers .xlsx).
+            let eocd = -1;
+            const searchStart = Math.max(0, bytes.length - 65557);
+            for (let i = bytes.length - 22; i >= searchStart; i--) {
+                if (readU32(i) === 0x06054b50) { eocd = i; break; }
+            }
+            if (eocd < 0) throw new Error("Le fichier n'est pas un classeur XLSX ZIP valide.");
+
+            const entryCount = readU16(eocd + 10);
+            let cursor = readU32(eocd + 16);
+            const entries = new Map();
+            for (let i = 0; i < entryCount; i++) {
+                if (readU32(cursor) !== 0x02014b50) throw new Error("Structure ZIP XLSX invalide.");
+                const method = readU16(cursor + 10);
+                const compressedSize = readU32(cursor + 20);
+                const uncompressedSize = readU32(cursor + 24);
+                const nameLength = readU16(cursor + 28);
+                const extraLength = readU16(cursor + 30);
+                const commentLength = readU16(cursor + 32);
+                const localOffset = readU32(cursor + 42);
+                const name = decoder.decode(bytes.slice(cursor + 46, cursor + 46 + nameLength));
+                entries.set(name, { method, compressedSize, uncompressedSize, localOffset });
+                cursor += 46 + nameLength + extraLength + commentLength;
+            }
+            const totalUncompressedSize = Array.from(entries.values()).reduce((sum, entry) => sum + entry.uncompressedSize, 0);
+            if (totalUncompressedSize > 50 * 1024 * 1024) throw new Error('Le contenu décompressé du classeur dépasse la limite de sécurité de 50 Mo.');
+
+            async function readEntry(name) {
+                const entry = entries.get(name);
+                if (!entry) return null;
+                const offset = entry.localOffset;
+                if (readU32(offset) !== 0x04034b50) throw new Error(`Entrée ZIP invalide : ${name}`);
+                const localNameLength = readU16(offset + 26);
+                const localExtraLength = readU16(offset + 28);
+                const dataStart = offset + 30 + localNameLength + localExtraLength;
+                const compressed = bytes.slice(dataStart, dataStart + entry.compressedSize);
+                if (entry.method === 0) return compressed;
+                if (entry.method !== 8) throw new Error(`Compression XLSX non prise en charge pour ${name}.`);
+                const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+                return new Uint8Array(await new Response(stream).arrayBuffer());
+            }
+
+            function parseXml(data, fileLabel) {
+                if (!data) throw new Error(`Le fichier XLSX ne contient pas ${fileLabel}.`);
+                const xml = new DOMParser().parseFromString(decoder.decode(data), 'application/xml');
+                if (xml.getElementsByTagName('parsererror').length) throw new Error(`Le XML ${fileLabel} est illisible.`);
+                return xml;
+            }
+
+            const workbookXml = parseXml(await readEntry('xl/workbook.xml'), 'workbook.xml');
+            const relsXml = parseXml(await readEntry('xl/_rels/workbook.xml.rels'), 'workbook.xml.rels');
+            const sheetNodes = Array.from(workbookXml.getElementsByTagNameNS('*', 'sheet'));
+            const firstVisibleSheet = sheetNodes.find(node => node.getAttribute('state') !== 'hidden') || sheetNodes[0];
+            if (!firstVisibleSheet) throw new Error("Aucune feuille de calcul n'a été trouvée dans le classeur.");
+            const relationshipId = firstVisibleSheet.getAttribute('r:id') || firstVisibleSheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+            const relationship = Array.from(relsXml.getElementsByTagNameNS('*', 'Relationship')).find(node => node.getAttribute('Id') === relationshipId);
+            if (!relationship) throw new Error("Impossible d'identifier la première feuille du classeur.");
+            let sheetPath = relationship.getAttribute('Target').replace(/^\//, '');
+            if (!sheetPath.startsWith('xl/')) sheetPath = 'xl/' + sheetPath.replace(/^\.\//, '');
+            const normalizedParts = [];
+            sheetPath.split('/').forEach(part => {
+                if (part === '..') normalizedParts.pop();
+                else if (part !== '.' && part !== '') normalizedParts.push(part);
+            });
+            sheetPath = normalizedParts.join('/');
+
+            let sharedStrings = [];
+            if (entries.has('xl/sharedStrings.xml')) {
+                const sharedXml = parseXml(await readEntry('xl/sharedStrings.xml'), 'sharedStrings.xml');
+                sharedStrings = Array.from(sharedXml.getElementsByTagNameNS('*', 'si')).map(si =>
+                    Array.from(si.getElementsByTagNameNS('*', 't')).map(t => t.textContent || '').join('')
+                );
+            }
+
+            const sheetXml = parseXml(await readEntry(sheetPath), sheetPath);
+            const sheetData = sheetXml.getElementsByTagNameNS('*', 'sheetData')[0];
+            if (!sheetData) throw new Error("La première feuille Excel ne contient pas de tableau de données.");
+            const matrix = [];
+            const rowNodes = Array.from(sheetData.getElementsByTagNameNS('*', 'row'));
+            function columnIndex(cellRef) {
+                const letters = String(cellRef || '').match(/^[A-Z]+/i)?.[0] || '';
+                let n = 0;
+                for (const char of letters.toUpperCase()) n = n * 26 + char.charCodeAt(0) - 64;
+                return Math.max(0, n - 1);
+            }
+
+            rowNodes.forEach((rowNode, rowFallbackIndex) => {
+                const rowIndex = Math.max(0, Number(rowNode.getAttribute('r') || rowFallbackIndex + 1) - 1);
+                if (rowIndex > 100000) throw new Error('Le classeur contient un numéro de ligne anormalement élevé.');
+                matrix[rowIndex] = matrix[rowIndex] || [];
+                const cells = Array.from(rowNode.getElementsByTagNameNS('*', 'c'));
+                cells.forEach(cell => {
+                    const colIndex = columnIndex(cell.getAttribute('r'));
+                    if (colIndex > 16383) throw new Error('Le classeur contient un numéro de colonne supérieur à la limite Excel.');
+                    const type = cell.getAttribute('t') || '';
+                    const valueNode = cell.getElementsByTagNameNS('*', 'v')[0];
+                    let value = valueNode ? valueNode.textContent : '';
+                    if (type === 's' && value !== '') value = sharedStrings[Number(value)] ?? '';
+                    else if (type === 'inlineStr') {
+                        const inline = cell.getElementsByTagNameNS('*', 'is')[0];
+                        value = inline ? Array.from(inline.getElementsByTagNameNS('*', 't')).map(t => t.textContent || '').join('') : '';
+                    } else if (type === 'b') value = value === '1' ? 'TRUE' : 'FALSE';
+                    matrix[rowIndex][colIndex] = value;
+                });
+            });
+
+            return rendreEntetesEtLignes(matrix);
         }
 
         function detecterSeparateurCSV(text) {
@@ -595,36 +791,7 @@
                 if (currentRow.some(cell => cell.trim() !== '')) rows.push(currentRow);
             }
 
-            if (rows.length < 2) return { enTetes: [], lignes: [] };
-
-            // On conserve strictement la position des colonnes : une en-tête vide ne doit
-            // jamais décaler les valeurs des colonnes suivantes.
-            const enTetes = [];
-            const occurrences = new Map();
-            rows[0].forEach((cell, index) => {
-                let header = String(cell ?? '').trim();
-                if (!header) header = `Colonne sans nom ${index + 1}`;
-                const base = header;
-                const count = (occurrences.get(base) || 0) + 1;
-                occurrences.set(base, count);
-                if (count > 1) header = `${base} (${count})`;
-                enTetes.push(header);
-            });
-
-            const resultats = [];
-            for (let i = 1; i < rows.length; i++) {
-                const valeurs = rows[i];
-                if (valeurs.length > enTetes.length) {
-                    throw new Error(`La ligne ${i + 1} contient plus de colonnes que la ligne d’en-tête. Vérifiez le séparateur et les guillemets.`);
-                }
-                const objetLigne = {};
-                enTetes.forEach((entete, index) => {
-                    objetLigne[entete] = valeurs[index] !== undefined ? String(valeurs[index]).trim() : '';
-                });
-                resultats.push(objetLigne);
-            }
-
-            return { enTetes, lignes: resultats };
+            return rendreEntetesEtLignes(rows);
         }
 
         function findMatchingGristColumn(header) {
@@ -817,6 +984,36 @@
             document.getElementById('status-msg').innerText = "Analyse de l'import en cours...";
 
             try {
+                const singleRefTargets = Object.values(mapping).filter(target => Object.prototype.hasOwnProperty.call(SINGLE_REFERENCE_COLUMNS, target));
+                if (singleRefTargets.length) {
+                    const loaded = await preloadReferenceTables();
+                    if (!loaded || !refCachesLoaded) {
+                        throw new Error("Impossible de charger ETIQUETTES. Aucun import n'a été préparé : vérifiez l'accès à la table de référence.");
+                    }
+
+                    const referenceErrors = [];
+                    parsedData.forEach((row, rowIndex) => {
+                        for (const [sourceHeader, targetColumn] of Object.entries(mapping)) {
+                            if (!Object.prototype.hasOwnProperty.call(SINGLE_REFERENCE_COLUMNS, targetColumn)) continue;
+                            const rawValue = row[sourceHeader];
+                            if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') continue;
+                            const resolved = resolveSingleReferenceValue(targetColumn, rawValue);
+                            if (!resolved.ok) {
+                                referenceErrors.push(`Ligne ${rowIndex + 2} — ${targetColumn} : « ${String(rawValue).trim()} » (${resolved.reason})`);
+                            }
+                        }
+                    });
+
+                    if (referenceErrors.length) {
+                        const preview = referenceErrors.slice(0, 15).join('\n');
+                        const more = referenceErrors.length > 15 ? `\n… et ${referenceErrors.length - 15} autre(s) valeur(s) à corriger.` : '';
+                        btn.disabled = false;
+                        document.getElementById('status-msg').innerText = `${referenceErrors.length} valeur(s) de référence à corriger.`;
+                        alert("Import interrompu : certaines valeurs ne correspondent pas aux libellés de la table ETIQUETTES.\n\nAucune modification n'a été préparée ni envoyée à Grist.\n\n" + preview + more);
+                        return;
+                    }
+                }
+
                 const rawExisting = await grist.docApi.fetchTable('CONTACTS');
                 const existingContacts = normalizeGristRecords(rawExisting);
 
@@ -853,6 +1050,10 @@
                                 } else {
                                     newRecord[finalKey] = val;
                                 }
+                            } else if (Object.prototype.hasOwnProperty.call(SINGLE_REFERENCE_COLUMNS, finalKey)) {
+                                const resolved = resolveSingleReferenceValue(finalKey, val);
+                                if (!resolved.ok) throw new Error(`Référence non reconnue pour ${finalKey} : ${String(val)}`);
+                                newRecord[finalKey] = resolved.id;
                             } else {
                                 newRecord[finalKey] = val;
                             }
@@ -1269,7 +1470,7 @@
                             <!-- Encart 2 : Fiche Importée (Lecture seule - Données brutes) -->
                             <div class="resolver-column" style="background: #fdfdfd; border-color: var(--border);">
                                 <h4>${escapeHtml(importedTitle)}</h4>
-                                <p class="fusion-preview-note" style="color:#64748b;">Valeurs brutes issues du fichier CSV (lecture seule).</p>
+                                <p class="fusion-preview-note" style="color:#64748b;">Valeurs issues du fichier importé (lecture seule).</p>
 
                                 <div class="form-group"><label>Nom</label><input type="text" disabled value="${escapeHtml(imp.NOM || '')}"></div>
                                 <div class="form-group"><label>Prénom</label><input type="text" disabled value="${escapeHtml(imp.PRENOM || '')}"></div>
