@@ -80,6 +80,9 @@
         .btn-secondary:hover { background-color: #d97706; }
         .btn-warning-alt { background-color: #d97706; color: white; }
         .btn-warning-alt:hover { background-color: #b45309; }
+        .btn-nav { background-color: #475569; color: white; }
+        .btn-nav:hover { background-color: #334155; }
+        .btn-nav:disabled { background-color: #e2e8f0; color: #94a3b8; cursor: not-allowed; }
 
         #mapping-container {
             display: grid;
@@ -138,6 +141,17 @@
             margin-bottom: 15px;
             font-weight: 600;
             color: #92400e;
+        }
+
+        .resolver-nav-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #fff;
+            padding: 10px 15px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            margin-bottom: 15px;
         }
 
         .resolver-grid-scroll {
@@ -238,6 +252,16 @@
             color: white;
         }
         .btn-commit-import:hover { background-color: var(--success-hover); }
+
+        .badge-choice {
+            display: inline-block;
+            background: #e0e7ff;
+            color: #3730a3;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -307,7 +331,7 @@
         let detectedDuplicates = [];
         let currentDuplicateIndex = 0;
         let pendingInitialRecords = [];
-        let pendingResolutionActions = [];
+        let resolutionChoices = {};
         let importInProgress = false;
         let actualEtiquettesTableName = "ETIQUETTES";
         let refCaches = { domaine: [], typeStruct: [], statutJur: [] };
@@ -328,10 +352,10 @@
             return [];
         }
 
-        // Sécurité : échappe toute valeur avant insertion dans du HTML.
-        // Les données provenant de Grist ou du CSV sont considérées comme non fiables.
+        // Échappe uniquement les caractères de syntaxe HTML sans altérer les accents ou signes spéciaux
         function escapeHtml(value) {
-            return String(value ?? '')
+            if (value === undefined || value === null) return '';
+            return String(value)
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
@@ -339,7 +363,7 @@
                 .replace(/'/g, '&#39;');
         }
 
-        // Normalisation commune pour les comparaisons de doublons.
+        // Normalisation utilisée UNIQUEMENT pour comparer les identifiants de doublons (jamais pour modifier le contenu des champs)
         function normalizeForDuplicate(value) {
             return String(value ?? '')
                 .normalize("NFD")
@@ -354,7 +378,7 @@
             const addEmails = (value) => {
                 if (value === undefined || value === null || value === '') return;
                 String(value)
-                    .split(/[;,\\n]+/)
+                    .split(/[;,\n]+/)
                     .map(v => normalizeForDuplicate(v))
                     .filter(Boolean)
                     .forEach(v => values.push(v));
@@ -425,10 +449,21 @@
             if (event.target.files[0]) processFile(event.target.files[0]);
         }
 
+        // Détecte automatiquement si le fichier CSV est encodé en UTF-8 ou Windows-1252 (Excel FR)
+        function decodeCsvBuffer(buffer) {
+            try {
+                const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+                return utf8Decoder.decode(buffer);
+            } catch (e) {
+                const win1252Decoder = new TextDecoder('windows-1252');
+                return win1252Decoder.decode(buffer);
+            }
+        }
+
         async function processFile(file) {
             if (!file) return;
 
-            const maxSize = 10 * 1024 * 1024; // 10 Mo
+            const maxSize = 10 * 1024 * 1024;
             if (file.size > maxSize) {
                 alert("Le fichier est trop volumineux. La taille maximale autorisée est de 10 Mo.");
                 return;
@@ -443,7 +478,8 @@
             const reader = new FileReader();
             reader.onload = function(e) {
                 try {
-                    const parsed = parserCSV(e.target.result);
+                    const text = decodeCsvBuffer(e.target.result);
+                    const parsed = parserCSV(text);
                     csvHeaders = parsed.enTetes;
                     parsedData = parsed.lignes;
                     if (parsedData.length === 0) {
@@ -455,93 +491,100 @@
                     alert("Erreur de lecture du CSV : " + err.message);
                 }
             };
-            reader.readAsText(file, 'UTF-8');
+            reader.readAsArrayBuffer(file);
         }
 
+        // Découpe les lignes CSV en respectant les retours à la ligne internes entre guillemets
         function parserCSV(text) {
-            const lignes = text.split(/\r\n|\n/).filter(l => l.trim() !== "");
-            if (lignes.length < 2) return { enTetes: [], lignes: [] };
-            const separateur = lignes[0].includes(';') ? ';' : ',';
-            const enTetes = decouperLigne(lignes[0], separateur).map(e => e.trim()).filter(e => e !== "");
+            const cleanText = text.replace(/^\uFEFF/, ''); // Supprime le BOM UTF-8 éventuel
+            if (!cleanText.trim()) return { enTetes: [], lignes: [] };
+
+            const firstLineEnd = cleanText.indexOf('\n');
+            const firstLine = firstLineEnd !== -1 ? cleanText.slice(0, firstLineEnd) : cleanText;
+            const separateur = firstLine.includes(';') ? ';' : ',';
+
+            const rows = [];
+            let currentRow = [];
+            let currentVal = '';
+            let inQuotes = false;
+
+            for (let i = 0; i < cleanText.length; i++) {
+                const char = cleanText[i];
+                const nextChar = cleanText[i + 1];
+
+                if (char === '"') {
+                    if (inQuotes && nextChar === '"') {
+                        currentVal += '"';
+                        i++;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === separateur && !inQuotes) {
+                    currentRow.push(currentVal);
+                    currentVal = '';
+                } else if ((char === '\r' || char === '\n') && !inQuotes) {
+                    if (char === '\r' && nextChar === '\n') i++;
+                    currentRow.push(currentVal);
+                    if (currentRow.some(cell => cell.trim() !== '')) {
+                        rows.push(currentRow);
+                    }
+                    currentRow = [];
+                    currentVal = '';
+                } else {
+                    currentVal += char;
+                }
+            }
+
+            if (currentVal !== '' || currentRow.length > 0) {
+                currentRow.push(currentVal);
+                if (currentRow.some(cell => cell.trim() !== '')) {
+                    rows.push(currentRow);
+                }
+            }
+
+            if (rows.length < 2) return { enTetes: [], lignes: [] };
+
+            const enTetes = rows[0].map(e => e.trim()).filter(e => e !== "");
             const resultats = [];
-            for (let i = 1; i < lignes.length; i++) {
-                const valeurs = decouperLigne(lignes[i], separateur);
-                if (valeurs.length === 0) continue;
+
+            for (let i = 1; i < rows.length; i++) {
+                const valeurs = rows[i];
                 const objetLigne = {};
                 enTetes.forEach((entete, index) => {
                     objetLigne[entete] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
                 });
                 resultats.push(objetLigne);
             }
-            return { enTetes, lignes: resultats };
-        }
 
-        function decouperLigne(ligne, separateur) {
-            const valeurs = [];
-            let courant = '';
-            let entreGuillemets = false;
-            for (let i = 0; i < ligne.length; i++) {
-                const char = ligne[i];
-                if (char === '"') entreGuillemets = !entreGuillemets;
-                else if (char === separateur && !entreGuillemets) { valeurs.push(courant); courant = ''; }
-                else courant += char;
-            }
-            valeurs.push(courant);
-            return valeurs.map(v => v.replace(/^"|"$/g, '').replace(/""/g, '"'));
+            return { enTetes, lignes: resultats };
         }
 
         function findMatchingGristColumn(header) {
             const cleanHeader = header.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
             
-            // Dictionnaire des synonymes fréquents pour assurer la reconnaissance automatique
             const synonyms = {
-                'nom': 'NOM',
-                'prenom': 'PRENOM',
-                'email': 'EMAIL_PRINCIPAL',
-                'courriel': 'EMAIL_PRINCIPAL',
-                'mail': 'EMAIL_PRINCIPAL',
-                'emailprincipal': 'EMAIL_PRINCIPAL',
-                'emailssecondaires': 'EMAILS_SECONDAIRES',
-                'autresemails': 'EMAILS_SECONDAIRES',
-                'telephone': 'Téléphone_Principal',
-                'telephoneprincipal': 'Téléphone_Principal',
-                'tel': 'Téléphone_Principal',
-                'tél': 'Téléphone_Principal',
-                'telephonessecondaires': 'Téléphones_Secondaires',
-                'autrestelephones': 'Téléphones_Secondaires',
-                'nomstructure': 'NOM_Structure',
-                'structure': 'NOM_Structure',
-                'entreprise': 'NOM_Structure',
-                'societe': 'NOM_Structure',
-                'adresse': 'Adresse',
-                'rue': 'Adresse',
-                'codepostal': 'Code_Postal',
-                'cp': 'Code_Postal',
-                'ville': 'Ville',
-                'commune': 'Ville',
-                'pays': 'Pays',
-                'fonction': 'Fonction_Profession',
-                'profession': 'Fonction_Profession',
-                'poste': 'Fonction_Profession',
-                'commentaire': 'Commentaire_Description',
-                'description': 'Commentaire_Description',
-                'notes': 'Commentaire_Description',
-                'statutjuridique': 'STATUT_JURIDIQUE',
-                'statut': 'STATUT_JURIDIQUE',
-                'typedestructurercontact': 'TYPE_DE_STRUCTURE_CONTACT',
-                'typestructure': 'TYPE_DE_STRUCTURE_CONTACT',
-                'domainedactivites': 'DOMAINE_D_ACTIVITES',
-                'domaine': 'DOMAINE_D_ACTIVITES',
-                'activite': 'DOMAINE_D_ACTIVITES',
-                'secteur': 'DOMAINE_D_ACTIVITES',
-                'service': 'Service',
-                'creepar': 'Cree_Par',
-                'datesaisie': 'Date_Saisie'
+                'nom': 'NOM', 'prenom': 'PRENOM', 'email': 'EMAIL_PRINCIPAL',
+                'courriel': 'EMAIL_PRINCIPAL', 'mail': 'EMAIL_PRINCIPAL',
+                'emailprincipal': 'EMAIL_PRINCIPAL', 'emailssecondaires': 'EMAILS_SECONDAIRES',
+                'autresemails': 'EMAILS_SECONDAIRES', 'telephone': 'Téléphone_Principal',
+                'telephoneprincipal': 'Téléphone_Principal', 'tel': 'Téléphone_Principal',
+                'tél': 'Téléphone_Principal', 'telephonessecondaires': 'Téléphones_Secondaires',
+                'autrestelephones': 'Téléphones_Secondaires', 'nomstructure': 'NOM_Structure',
+                'structure': 'NOM_Structure', 'entreprise': 'NOM_Structure',
+                'societe': 'NOM_Structure', 'adresse': 'Adresse', 'rue': 'Adresse',
+                'codepostal': 'Code_Postal', 'cp': 'Code_Postal', 'ville': 'Ville',
+                'commune': 'Ville', 'pays': 'Pays', 'fonction': 'Fonction_Profession',
+                'profession': 'Fonction_Profession', 'poste': 'Fonction_Profession',
+                'commentaire': 'Commentaire_Description', 'commentairedescription': 'Commentaire_Description',
+                'description': 'Commentaire_Description', 'notes': 'Commentaire_Description',
+                'statutjuridique': 'STATUT_JURIDIQUE', 'statut': 'STATUT_JURIDIQUE',
+                'typedestructurercontact': 'TYPE_DE_STRUCTURE_CONTACT', 'typestructure': 'TYPE_DE_STRUCTURE_CONTACT',
+                'domainedactivites': 'DOMAINE_D_ACTIVITES', 'domaine': 'DOMAINE_D_ACTIVITES',
+                'activite': 'DOMAINE_D_ACTIVITES', 'secteur': 'DOMAINE_D_ACTIVITES',
+                'service': 'Service', 'creepar': 'Cree_Par', 'datesaisie': 'Date_Saisie'
             };
 
-            if (synonyms[cleanHeader]) {
-                return synonyms[cleanHeader];
-            }
+            if (synonyms[cleanHeader]) return synonyms[cleanHeader];
 
             const officialColumns = [
                 "Cree_Par", "Date_Saisie", "Service", "DOMAINE_D_ACTIVITES",
@@ -556,7 +599,6 @@
                 const cleanCol = col.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
                 if (cleanHeader === cleanCol) return col;
             }
-
             return null;
         }
 
@@ -603,15 +645,11 @@
                     const opt = document.createElement('option');
                     opt.value = col;
                     opt.innerText = col;
-                    if (matchedCol && col === matchedCol) {
-                        opt.selected = true;
-                    }
+                    if (matchedCol && col === matchedCol) opt.selected = true;
                     select.appendChild(opt);
                 });
 
-                if (!matchedCol) {
-                    card.classList.add('unmatched');
-                }
+                if (!matchedCol) card.classList.add('unmatched');
 
                 select.addEventListener('change', function() {
                     if (this.value) card.classList.remove('unmatched');
@@ -726,7 +764,7 @@
 
                 detectedDuplicates = [];
                 pendingInitialRecords = [];
-                pendingResolutionActions = [];
+                resolutionChoices = {};
                 importInProgress = true;
                 const recordsSeenInImport = [];
 
@@ -821,10 +859,24 @@
                 reportSection.appendChild(actions);
             }
 
+            const resolutionActions = [];
+            Object.values(resolutionChoices).forEach(choice => {
+                if (choice.action === 'ignore_import') return;
+                if (choice.action === 'import_keep_existing') {
+                    resolutionActions.push(['AddRecord', 'CONTACTS', null, choice.editedRecord]);
+                } else if (choice.action === 'validate_fusion') {
+                    resolutionActions.push(['UpdateRecord', 'CONTACTS', choice.existingId, choice.fusionRecord]);
+                } else if (choice.action === 'delete_grist_and_import') {
+                    resolutionActions.push(['RemoveRecord', 'CONTACTS', choice.existingId]);
+                    resolutionActions.push(['AddRecord', 'CONTACTS', null, choice.editedRecord]);
+                }
+            });
+            reportSection._finalActionsList = resolutionActions;
+
             actions.innerHTML = `
                 <div style="font-size: 0.9rem; color: var(--text-main);">
                     <strong>Import prêt à être enregistré.</strong><br>
-                    ${detectedDuplicates.length > 0 ? 'Tous les doublons ont été traités. ' : ''}Aucune modification n'a encore été envoyée à CONTACTS.
+                    Tous les doublons ont été traités (${Object.keys(resolutionChoices).length}/${detectedDuplicates.length}). Aucune modification n'a encore été envoyée à CONTACTS.
                     <br><span style="font-size:0.82rem; color:#92400e;">La validation finale est la seule étape qui écrit dans Grist.</span>
                 </div>
                 <div style="display:flex; gap:10px; flex-wrap:wrap;">
@@ -837,15 +889,16 @@
         async function commitImport() {
             if (!importInProgress) return;
 
+            const reportSection = document.getElementById('report-section');
             const actions = [];
 
             pendingInitialRecords.forEach(record => {
                 actions.push(['AddRecord', 'CONTACTS', null, record]);
             });
 
-            pendingResolutionActions.forEach(action => {
-                actions.push(action);
-            });
+            if (reportSection._finalActionsList) {
+                actions.push(...reportSection._finalActionsList);
+            }
 
             if (actions.length === 0) {
                 importInProgress = false;
@@ -855,33 +908,22 @@
 
             const commitButtons = document.querySelectorAll('.btn-commit-import');
             commitButtons.forEach(button => button.disabled = true);
-            document.getElementById('status-msg').innerText =
-                "Validation finale en cours...";
+            document.getElementById('status-msg').innerText = "Validation finale en cours...";
 
             try {
-                // Point essentiel de la V4 : un seul appel à Grist pour toute la validation.
-                // Tant que cet appel n'est pas lancé, aucune modification n'est écrite dans CONTACTS.
                 await grist.docApi.applyUserActions(actions);
-
-                const addedCount = pendingInitialRecords.length +
-                    pendingResolutionActions.filter(a => a[0] === 'AddRecord').length;
+                const addedCount = pendingInitialRecords.length + actions.filter(a => a[0] === 'AddRecord' || a[0] === 'UpdateRecord').length;
 
                 importInProgress = false;
                 showImportCompleted(addedCount);
             } catch (err) {
                 commitButtons.forEach(button => button.disabled = false);
                 document.getElementById('status-msg').innerText = "Échec de la validation finale.";
-                alert(
-                    "La validation finale de l'import a échoué.\n\n" +
-                    "Aucune nouvelle tentative automatique n'a été effectuée. " +
-                    "Vérifiez l'état de Grist avant de relancer l'import.\n\n" +
-                    (err.message || err)
-                );
+                alert("La validation finale de l'import a échoué.\n\n" + (err.message || err));
             }
         }
 
         function showImportCompleted(addedCount) {
-            const reportSection = document.getElementById('report-section');
             const finalActions = document.getElementById('final-import-actions');
             if (finalActions) finalActions.remove();
 
@@ -890,11 +932,10 @@
             wrapper.innerHTML = `
                 <div style="background: #ecfdf5; border: 1px solid var(--success); padding: 20px; border-radius: 8px; color: #065f46; text-align:center; font-weight: 600;">
                     ✓ Import définitivement validé.<br>
-                    <span style="font-size:0.9rem; font-weight:normal;">${addedCount} fiche(s) ajoutée(s) ou recréée(s). Les modifications ont été envoyées à Grist en une seule validation.</span>
+                    <span style="font-size:0.9rem; font-weight:normal;">${addedCount} action(s) enregistrée(s). Les modifications ont été envoyées à Grist en une seule validation.</span>
                 </div>
             `;
-            document.getElementById('report-summary').innerText =
-                `Import définitivement validé : ${addedCount} fiche(s) ajoutée(s) ou recréée(s).`;
+            document.getElementById('report-summary').innerText = `Import définitivement validé.`;
             document.getElementById('report-summary').style.color = "var(--success)";
             document.getElementById('status-msg').innerText = "Import terminé.";
         }
@@ -905,15 +946,12 @@
                 return;
             }
 
-            const confirmed = confirm(
-                "Annuler l'import en cours ?\n\n" +
-                "Aucune des modifications préparées ne sera enregistrée dans Grist."
-            );
+            const confirmed = confirm("Annuler l'import en cours ?\n\nAucune des modifications préparées ne sera enregistrée dans Grist.");
             if (!confirmed) return;
 
             importInProgress = false;
             pendingInitialRecords = [];
-            pendingResolutionActions = [];
+            resolutionChoices = {};
             detectedDuplicates = [];
             currentDuplicateIndex = 0;
             resetImportInterface();
@@ -935,7 +973,7 @@
             parsedData = [];
             csvHeaders = [];
             pendingInitialRecords = [];
-            pendingResolutionActions = [];
+            resolutionChoices = {};
             detectedDuplicates = [];
         }
 
@@ -982,8 +1020,9 @@
             return document.getElementById(id)?.value ?? '';
         }
 
-        function buildEditedImportRecord(item) {
-            const record = { ...item.imported };
+        function buildEditedImportRecord(item, currentImpData = null) {
+            const source = currentImpData || item.imported;
+            const record = { ...source };
 
             record.NOM = getEditedValue('edit-nom');
             record.PRENOM = getEditedValue('edit-prenom');
@@ -993,6 +1032,7 @@
             record.Telephones_Secondaires = getEditedValue('edit-telsec');
             record.NOM_Structure = getEditedValue('edit-nomstruct');
             record.Adresse = getEditedValue('edit-adresse');
+            // Conservation intégrale des accents, retours à la ligne et caractères spéciaux
             record.Commentaire_Description = getEditedValue('edit-commentaire');
 
             const typeStruct = getEditedValue('edit-typestruct');
@@ -1011,9 +1051,9 @@
             return record;
         }
 
-        function buildFusionRecord(item) {
+        function buildFusionRecord(item, currentImpData = null) {
             const ext = item.existing || {};
-            const imp = buildEditedImportRecord(item);
+            const imp = buildEditedImportRecord(item, currentImpData);
 
             const existingEmailPrincipal = ext.EMAIL_PRINCIPAL || '';
             const importedEmailPrincipal = imp.EMAIL_PRINCIPAL || '';
@@ -1037,10 +1077,11 @@
                     ? existingTelPrincipal : ''
             ]);
 
-            let fusionComment = ext.Commentaire_Description || '';
-            const importedComment = imp.Commentaire_Description || '';
-            if (importedComment && normalizeForDuplicate(importedComment) !== normalizeForDuplicate(fusionComment)) {
-                fusionComment = fusionComment
+            // Comparaison exacte (avec accents et ponctuation préservés) pour la fusion des commentaires
+            let fusionComment = String(ext.Commentaire_Description || '');
+            const importedComment = String(imp.Commentaire_Description || '');
+            if (importedComment.trim() && importedComment.trim() !== fusionComment.trim()) {
+                fusionComment = fusionComment.trim()
                     ? fusionComment + "\n---\n" + importedComment
                     : importedComment;
             }
@@ -1079,9 +1120,12 @@
 
             if (currentDuplicateIndex >= detectedDuplicates.length) {
                 wrapper.innerHTML = `<div style="background: #ecfdf5; border: 1px solid var(--success); padding: 20px; border-radius: 8px; color: #065f46; text-align:center; font-weight: 600;">
-                    Tous les doublons ont été traités.
+                    Tous les doublons ont été traités (${Object.keys(resolutionChoices).length}/${detectedDuplicates.length}).
                     <div style="font-size:0.9rem; font-weight:normal; margin-top:8px;">
-                        Aucune modification n'a encore été enregistrée dans Grist.
+                        Vous pouvez valider définitivement l'import ci-dessous ou revenir en arrière pour modifier un choix.
+                    </div>
+                    <div style="margin-top:12px;">
+                        <button type="button" class="btn btn-nav" onclick="goToPreviousDuplicate()">◀ Revenir au dernier doublon</button>
                     </div>
                 </div>`;
                 showFinalImportActions();
@@ -1090,9 +1134,12 @@
 
             const item = detectedDuplicates[currentDuplicateIndex];
             const ext = item.existing || {};
-            const imp = item.imported || {};
-            const isInternal = item.source === "import";
+            
+            const existingChoice = resolutionChoices[currentDuplicateIndex];
+            const imp = existingChoice ? existingChoice.editedRecord : item.imported;
+            const currentAction = existingChoice ? existingChoice.action : null;
 
+            const isInternal = item.source === "import";
             const existingEmailSec = ext.EMAILS_SECONDAIRES || '';
             const existingTelPrin = ext.Telephone_Principal || ext.Téléphone_Principal || '';
             const existingTelSec = ext.Telephones_Secondaires || ext.Téléphones_Secondaires || '';
@@ -1101,16 +1148,16 @@
                 ? "Doublon détecté dans le fichier importé"
                 : "Doublon détecté avec une fiche Grist existante";
 
-            const existingTitle = isInternal
-                ? "Première occurrence du fichier"
-                : "1 — Fiche existante (Grist)";
-
+            const existingTitle = isInternal ? "Première occurrence du fichier" : "1 — Fiche existante (Grist)";
             const importedTitle = "2 — Fiche issue du fichier importé";
             const fusionTitle = "3 — Proposition de fiche fusionnée";
+            const idLine = isInternal ? "Cette fiche provient du même fichier d'import." : `ID Fiche Grist : ${escapeHtml(ext.id)}`;
 
-            const idLine = isInternal
-                ? "Cette fiche provient du même fichier d'import."
-                : `ID Fiche Grist : ${escapeHtml(ext.id)}`;
+            let actionBadgeText = "";
+            if (currentAction === 'ignore_import') actionBadgeText = "Choix actuel : Ignorer le fichier";
+            else if (currentAction === 'import_keep_existing') actionBadgeText = "Choix actuel : Importer + conserver l'existant";
+            else if (currentAction === 'delete_grist_and_import') actionBadgeText = "Choix actuel : Remplacer l'existant";
+            else if (currentAction === 'validate_fusion') actionBadgeText = "Choix actuel : Fusionner avec l'existant";
 
             wrapper.innerHTML = `
                 <div class="duplicate-resolver-container">
@@ -1124,6 +1171,18 @@
                         </span>
                     </div>
 
+                    <div class="resolver-nav-bar">
+                        <button class="btn btn-nav" ${currentDuplicateIndex === 0 ? 'disabled' : ''} onclick="goToPreviousDuplicate()">
+                            ◀ Précédent
+                        </button>
+                        <div style="font-size: 0.9rem;">
+                            ${actionBadgeText ? `<span class="badge-choice">${actionBadgeText}</span>` : '<span style="color:var(--text-muted);">Non traité</span>'}
+                        </div>
+                        <button class="btn btn-nav" onclick="goToNextDuplicate()">
+                            Suivant ▶
+                        </button>
+                    </div>
+
                     <p style="margin: 0 0 15px 0; font-size: 0.9rem; color: #92400e;">
                         ${escapeHtml(sourceLabel)}
                     </p>
@@ -1132,168 +1191,54 @@
                         <div class="resolver-grid">
                             <div class="resolver-column">
                                 <h4>${escapeHtml(existingTitle)}</h4>
-                                <div class="form-group">
-                                    <label>Nom</label>
-                                    <input type="text" disabled value="${escapeHtml(ext.NOM || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Prénom</label>
-                                    <input type="text" disabled value="${escapeHtml(ext.PRENOM || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Email Principal</label>
-                                    <input type="text" disabled value="${escapeHtml(ext.EMAIL_PRINCIPAL || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Emails Secondaires</label>
-                                    <input type="text" disabled value="${escapeHtml(existingEmailSec)}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Téléphone Principal</label>
-                                    <input type="text" disabled value="${escapeHtml(existingTelPrin)}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Téléphones Secondaires</label>
-                                    <input type="text" disabled value="${escapeHtml(existingTelSec)}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Nom Structure</label>
-                                    <input type="text" disabled value="${escapeHtml(ext.NOM_Structure || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Adresse</label>
-                                    <input type="text" disabled value="${escapeHtml(ext.Adresse || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Type de Structure</label>
-                                    <input type="text" disabled value="${escapeHtml(getReferenceLabel(refCaches.typeStruct, ext.TYPE_DE_STRUCTURE_CONTACT))}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Domaine d'activités</label>
-                                    <input type="text" disabled value="${escapeHtml(getReferenceLabel(refCaches.domaine, ext.DOMAINE_D_ACTIVITES))}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Statut juridique</label>
-                                    <input type="text" disabled value="${escapeHtml(getReferenceLabel(refCaches.statutJur, ext.STATUT_JURIDIQUE))}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Commentaire</label>
-                                    <textarea disabled>${escapeHtml(ext.Commentaire_Description || '')}</textarea>
-                                </div>
+                                <div class="form-group"><label>Nom</label><input type="text" disabled value="${escapeHtml(ext.NOM || '')}"></div>
+                                <div class="form-group"><label>Prénom</label><input type="text" disabled value="${escapeHtml(ext.PRENOM || '')}"></div>
+                                <div class="form-group"><label>Email Principal</label><input type="text" disabled value="${escapeHtml(ext.EMAIL_PRINCIPAL || '')}"></div>
+                                <div class="form-group"><label>Emails Secondaires</label><input type="text" disabled value="${escapeHtml(existingEmailSec)}"></div>
+                                <div class="form-group"><label>Téléphone Principal</label><input type="text" disabled value="${escapeHtml(existingTelPrin)}"></div>
+                                <div class="form-group"><label>Téléphones Secondaires</label><input type="text" disabled value="${escapeHtml(existingTelSec)}"></div>
+                                <div class="form-group"><label>Nom Structure</label><input type="text" disabled value="${escapeHtml(ext.NOM_Structure || '')}"></div>
+                                <div class="form-group"><label>Adresse</label><input type="text" disabled value="${escapeHtml(ext.Adresse || '')}"></div>
+                                <div class="form-group"><label>Type de Structure</label><input type="text" disabled value="${escapeHtml(getReferenceLabel(refCaches.typeStruct, ext.TYPE_DE_STRUCTURE_CONTACT))}"></div>
+                                <div class="form-group"><label>Domaine d'activités</label><input type="text" disabled value="${escapeHtml(getReferenceLabel(refCaches.domaine, ext.DOMAINE_D_ACTIVITES))}"></div>
+                                <div class="form-group"><label>Statut juridique</label><input type="text" disabled value="${escapeHtml(getReferenceLabel(refCaches.statutJur, ext.STATUT_JURIDIQUE))}"></div>
+                                <div class="form-group"><label>Commentaire</label><textarea disabled>${escapeHtml(ext.Commentaire_Description || '')}</textarea></div>
                             </div>
 
                             <div class="resolver-column" style="background: #fdfdfd; border-color: var(--primary);">
                                 <h4>${escapeHtml(importedTitle)}</h4>
                                 <p class="fusion-preview-note" style="color:#4f46e5;">Valeurs réellement présentes dans le fichier importé. Vous pouvez les corriger avant la décision finale.</p>
 
-                                <div class="form-group">
-                                    <label>Nom</label>
-                                    <input type="text" id="edit-nom" value="${escapeHtml(imp.NOM || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Prénom</label>
-                                    <input type="text" id="edit-prenom" value="${escapeHtml(imp.PRENOM || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Email Principal</label>
-                                    <input type="text" id="edit-emailp" value="${escapeHtml(imp.EMAIL_PRINCIPAL || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Emails Secondaires</label>
-                                    <input type="text" id="edit-emails" value="${escapeHtml(imp.EMAILS_SECONDAIRES || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Téléphone Principal</label>
-                                    <input type="text" id="edit-telp" value="${escapeHtml(imp.Telephone_Principal || imp.Téléphone_Principal || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Téléphones Secondaires</label>
-                                    <input type="text" id="edit-telsec" value="${escapeHtml(imp.Telephones_Secondaires || imp.Téléphones_Secondaires || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Nom Structure</label>
-                                    <input type="text" id="edit-nomstruct" value="${escapeHtml(imp.NOM_Structure || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Adresse</label>
-                                    <input type="text" id="edit-adresse" value="${escapeHtml(imp.Adresse || '')}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Type de Structure</label>
-                                    <select id="edit-typestruct">
-                                        ${createSelectOptionsFromCache(refCaches.typeStruct, imp.TYPE_DE_STRUCTURE_CONTACT)}
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Domaine d'activités</label>
-                                    <select id="edit-domaine">
-                                        ${createSelectOptionsFromCache(refCaches.domaine, imp.DOMAINE_D_ACTIVITES)}
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Statut juridique</label>
-                                    <select id="edit-statut">
-                                        ${createSelectOptionsFromCache(refCaches.statutJur, imp.STATUT_JURIDIQUE)}
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Commentaire</label>
-                                    <textarea id="edit-commentaire">${escapeHtml(imp.Commentaire_Description || '')}</textarea>
-                                </div>
+                                <div class="form-group"><label>Nom</label><input type="text" id="edit-nom" value="${escapeHtml(imp.NOM || '')}"></div>
+                                <div class="form-group"><label>Prénom</label><input type="text" id="edit-prenom" value="${escapeHtml(imp.PRENOM || '')}"></div>
+                                <div class="form-group"><label>Email Principal</label><input type="text" id="edit-emailp" value="${escapeHtml(imp.EMAIL_PRINCIPAL || '')}"></div>
+                                <div class="form-group"><label>Emails Secondaires</label><input type="text" id="edit-emails" value="${escapeHtml(imp.EMAILS_SECONDAIRES || '')}"></div>
+                                <div class="form-group"><label>Téléphone Principal</label><input type="text" id="edit-telp" value="${escapeHtml(imp.Telephone_Principal || imp.Téléphone_Principal || '')}"></div>
+                                <div class="form-group"><label>Téléphones Secondaires</label><input type="text" id="edit-telsec" value="${escapeHtml(imp.Telephones_Secondaires || imp.Téléphones_Secondaires || '')}"></div>
+                                <div class="form-group"><label>Nom Structure</label><input type="text" id="edit-nomstruct" value="${escapeHtml(imp.NOM_Structure || '')}"></div>
+                                <div class="form-group"><label>Adresse</label><input type="text" id="edit-adresse" value="${escapeHtml(imp.Adresse || '')}"></div>
+                                <div class="form-group"><label>Type de Structure</label><select id="edit-typestruct">${createSelectOptionsFromCache(refCaches.typeStruct, imp.TYPE_DE_STRUCTURE_CONTACT)}</select></div>
+                                <div class="form-group"><label>Domaine d'activités</label><select id="edit-domaine">${createSelectOptionsFromCache(refCaches.domaine, imp.DOMAINE_D_ACTIVITES)}</select></div>
+                                <div class="form-group"><label>Statut juridique</label><select id="edit-statut">${createSelectOptionsFromCache(refCaches.statutJur, imp.STATUT_JURIDIQUE)}</select></div>
+                                <div class="form-group"><label>Commentaire</label><textarea id="edit-commentaire">${escapeHtml(imp.Commentaire_Description || '')}</textarea></div>
                             </div>
 
                             <div class="resolver-column fusion-preview-column">
                                 <h4>${escapeHtml(fusionTitle)}</h4>
-                                <p class="fusion-preview-note">Cette colonne montre le résultat qui sera conservé si vous choisissez « Fusionner avec l'existant ». Les informations importées complètent l'existant lorsqu'elles sont renseignées.</p>
+                                <p class="fusion-preview-note">Cette colonne montre le résultat conservé si vous choisissez « Fusionner avec l'existant ».</p>
 
-                                <div class="form-group">
-                                    <label>Nom</label>
-                                    <input type="text" id="fusion-nom" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Prénom</label>
-                                    <input type="text" id="fusion-prenom" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Email Principal</label>
-                                    <input type="text" id="fusion-emailp" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Emails Secondaires</label>
-                                    <input type="text" id="fusion-emails" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Téléphone Principal</label>
-                                    <input type="text" id="fusion-telp" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Téléphones Secondaires</label>
-                                    <input type="text" id="fusion-telsec" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Nom Structure</label>
-                                    <input type="text" id="fusion-nomstruct" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Adresse</label>
-                                    <input type="text" id="fusion-adresse" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Type de Structure</label>
-                                    <input type="text" id="fusion-typestruct" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Domaine d'activités</label>
-                                    <input type="text" id="fusion-domaine" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Statut juridique</label>
-                                    <input type="text" id="fusion-statut" disabled>
-                                </div>
-                                <div class="form-group">
-                                    <label>Commentaire</label>
-                                    <textarea id="fusion-commentaire" disabled></textarea>
-                                </div>
+                                <div class="form-group"><label>Nom</label><input type="text" id="fusion-nom" disabled></div>
+                                <div class="form-group"><label>Prénom</label><input type="text" id="fusion-prenom" disabled></div>
+                                <div class="form-group"><label>Email Principal</label><input type="text" id="fusion-emailp" disabled></div>
+                                <div class="form-group"><label>Emails Secondaires</label><input type="text" id="fusion-emails" disabled></div>
+                                <div class="form-group"><label>Téléphone Principal</label><input type="text" id="fusion-telp" disabled></div>
+                                <div class="form-group"><label>Téléphones Secondaires</label><input type="text" id="fusion-telsec" disabled></div>
+                                <div class="form-group"><label>Nom Structure</label><input type="text" id="fusion-nomstruct" disabled></div>
+                                <div class="form-group"><label>Adresse</label><input type="text" id="fusion-adresse" disabled></div>
+                                <div class="form-group"><label>Type de Structure</label><input type="text" id="fusion-typestruct" disabled></div>
+                                <div class="form-group"><label>Domaine d'activités</label><input type="text" id="fusion-domaine" disabled></div>
+                                <div class="form-group"><label>Statut juridique</label><input type="text" id="fusion-statut" disabled></div>
+                                <div class="form-group"><label>Commentaire</label><textarea id="fusion-commentaire" disabled></textarea></div>
                             </div>
                         </div>
                     </div>
@@ -1302,28 +1247,24 @@
                         <button class="btn btn-danger" onclick="resolveDuplicate('ignore_import')">
                             🗑️ Ignorer le fichier
                         </button>
-
                         <button class="btn btn-secondary" onclick="resolveDuplicate('import_keep_existing')">
                             📥 Importer + conserver l'existant
                         </button>
-
                         ${isInternal ? '' : `
                         <button class="btn btn-warning-alt" onclick="resolveDuplicate('delete_grist_and_import')">
                             ❌ Remplacer l'existant
                         </button>
-
                         <button class="btn btn-success" onclick="resolveDuplicate('validate_fusion')">
                             🔄 Fusionner avec l'existant
                         </button>
                         `}
-
                         <button class="btn btn-cancel-import" onclick="cancelImport()">
                             ↩ Annuler tout l'import
                         </button>
                     </div>
 
                     <p style="margin: 12px 0 0; font-size: 0.8rem; color: var(--text-muted);">
-                        Aucune de ces décisions n'est envoyée à Grist immédiatement. Elles restent en attente jusqu'au bouton « Valider définitivement l'import ».
+                        Aucune décision n'est envoyée à Grist immédiatement. Vous pouvez naviguer librement avec « Précédent » et « Suivant » pour modifier vos choix.
                     </p>
                 </div>
             `;
@@ -1334,7 +1275,9 @@
         function updateFusionPreview() {
             const item = detectedDuplicates[currentDuplicateIndex];
             if (!item) return;
-            const fusion = buildFusionRecord(item);
+            const editedImport = buildEditedImportRecord(item);
+            const fusion = buildFusionRecord(item, editedImport);
+
             const set = (id, value) => {
                 const el = document.getElementById(id);
                 if (el) el.value = value ?? '';
@@ -1359,10 +1302,34 @@
              'edit-nomstruct', 'edit-adresse', 'edit-commentaire', 'edit-typestruct',
              'edit-domaine', 'edit-statut'].forEach(id => {
                 const el = document.getElementById(id);
-                if (el) el.addEventListener('input', updateFusionPreview);
-                if (el) el.addEventListener('change', updateFusionPreview);
+                if (el) {
+                    el.addEventListener('input', updateFusionPreview);
+                    el.addEventListener('change', updateFusionPreview);
+                }
             });
             updateFusionPreview();
+        }
+
+        function goToPreviousDuplicate() {
+            if (currentDuplicateIndex > 0) {
+                currentDuplicateIndex--;
+                renderCurrentDuplicate();
+            }
+        }
+
+        function goToNextDuplicate() {
+            const item = detectedDuplicates[currentDuplicateIndex];
+            if (item && !resolutionChoices[currentDuplicateIndex]) {
+                const editedImport = buildEditedImportRecord(item);
+                resolutionChoices[currentDuplicateIndex] = {
+                    action: 'ignore_import',
+                    editedRecord: editedImport,
+                    fusionRecord: buildFusionRecord(item, editedImport),
+                    existingId: item.existing?.id
+                };
+            }
+            currentDuplicateIndex++;
+            renderCurrentDuplicate();
         }
 
         async function resolveDuplicate(action) {
@@ -1370,49 +1337,20 @@
             if (!item) return;
 
             try {
-                // IMPORTANT : aucune action Grist n'est envoyée ici.
-                // Les décisions sont simplement mémorisées jusqu'à la validation finale.
-                if (action === 'ignore_import') {
-                    currentDuplicateIndex++;
-                    renderCurrentDuplicate();
-                    return;
-                }
-
                 const editedImport = buildEditedImportRecord(item);
+                const fusionRecord = buildFusionRecord(item, editedImport);
 
-                if (action === 'import_keep_existing') {
-                    pendingResolutionActions.push([
-                        'AddRecord', 'CONTACTS', null, editedImport
-                    ]);
-                    currentDuplicateIndex++;
-                    renderCurrentDuplicate();
-                    return;
-                }
-
-                if (item.source === "import") {
-                    throw new Error("Cette opération n'est pas disponible pour un doublon interne au fichier.");
-                }
-
-                if (action === 'validate_fusion') {
-                    const fusion = buildFusionRecord(item);
-
-                    pendingResolutionActions.push([
-                        'UpdateRecord', 'CONTACTS', item.existing.id, fusion
-                    ]);
-                }
-                else if (action === 'delete_grist_and_import') {
-                    pendingResolutionActions.push([
-                        'RemoveRecord', 'CONTACTS', item.existing.id
-                    ]);
-                    pendingResolutionActions.push([
-                        'AddRecord', 'CONTACTS', null, editedImport
-                    ]);
-                }
+                resolutionChoices[currentDuplicateIndex] = {
+                    action: action,
+                    editedRecord: editedImport,
+                    fusionRecord: fusionRecord,
+                    existingId: item.existing?.id
+                };
 
                 currentDuplicateIndex++;
                 renderCurrentDuplicate();
             } catch (err) {
-                alert("Erreur lors de la préparation de la résolution du doublon : " + (err.message || err));
+                alert("Erreur lors de l'enregistrement du choix : " + (err.message || err));
             }
         }
     </script>
