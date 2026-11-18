@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Importateur Intelligent de Contacts</title>
-    <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+    <script src="https://grist.numerique.gouv.fr/grist-plugin-api.js"></script>
     <style>
         :root {
             --primary: #4f46e5;
@@ -491,63 +491,135 @@
             reader.readAsArrayBuffer(file);
         }
 
+        function detecterSeparateurCSV(text) {
+            // On examine le premier enregistrement logique (en respectant les guillemets).
+            // Cela évite de choisir le mauvais séparateur lorsqu'un champ contient lui-même ; ou ,.
+            const candidats = [';', ',', '\t'];
+            const compteurs = { ';': 0, ',': 0, '\t': 0 };
+            let dansGuillemets = false;
+
+            for (let i = 0; i < text.length; i++) {
+                const c = text[i];
+                const suivant = text[i + 1];
+                if (c === '"') {
+                    if (dansGuillemets && suivant === '"') {
+                        i++;
+                    } else {
+                        dansGuillemets = !dansGuillemets;
+                    }
+                } else if (!dansGuillemets && (c === '\r' || c === '\n')) {
+                    break;
+                } else if (!dansGuillemets && Object.prototype.hasOwnProperty.call(compteurs, c)) {
+                    compteurs[c]++;
+                }
+            }
+
+            return candidats.reduce((meilleur, candidat) =>
+                compteurs[candidat] > compteurs[meilleur] ? candidat : meilleur, ';');
+        }
+
         function parserCSV(text) {
-            const cleanText = text.replace(/^\uFEFF/, '');
+            const cleanText = String(text || '').replace(/^\uFEFF/, '');
             if (!cleanText.trim()) return { enTetes: [], lignes: [] };
 
-            const firstLineEnd = cleanText.indexOf('\n');
-            const firstLine = firstLineEnd !== -1 ? cleanText.slice(0, firstLineEnd) : cleanText;
-            const separateur = firstLine.includes(';') ? ';' : ',';
-
+            const separateur = detecterSeparateurCSV(cleanText);
             const rows = [];
             let currentRow = [];
             let currentVal = '';
             let inQuotes = false;
+            let apresGuillemet = false;
 
             for (let i = 0; i < cleanText.length; i++) {
                 const char = cleanText[i];
                 const nextChar = cleanText[i + 1];
 
-                if (char === '"') {
-                    if (inQuotes && nextChar === '"') {
-                        currentVal += '"';
-                        i++;
+                if (inQuotes) {
+                    if (char === '"') {
+                        if (nextChar === '"') {
+                            currentVal += '"';
+                            i++;
+                        } else {
+                            inQuotes = false;
+                            apresGuillemet = true;
+                        }
                     } else {
-                        inQuotes = !inQuotes;
+                        currentVal += char;
                     }
-                } else if (char === separateur && !inQuotes) {
+                    continue;
+                }
+
+                if (apresGuillemet) {
+                    if (char === separateur) {
+                        currentRow.push(currentVal);
+                        currentVal = '';
+                        apresGuillemet = false;
+                    } else if (char === '\r' || char === '\n') {
+                        currentRow.push(currentVal);
+                        if (currentRow.some(cell => cell.trim() !== '')) rows.push(currentRow);
+                        currentRow = [];
+                        currentVal = '';
+                        apresGuillemet = false;
+                        if (char === '\r' && nextChar === '\n') i++;
+                    } else if (char === ' ' || char === '\t') {
+                        // Les espaces après un champ entre guillemets sont tolérés.
+                    } else {
+                        throw new Error(`Caractère inattendu après un guillemet fermant (position ${i + 1}).`);
+                    }
+                    continue;
+                }
+
+                if (char === '"') {
+                    if (currentVal.trim() !== '') {
+                        throw new Error(`Guillemet inattendu au milieu d'un champ (position ${i + 1}).`);
+                    }
+                    currentVal = '';
+                    inQuotes = true;
+                } else if (char === separateur) {
                     currentRow.push(currentVal);
                     currentVal = '';
-                } else if ((char === '\r' || char === '\n') && !inQuotes) {
-                    if (char === '\r' && nextChar === '\n') i++;
+                } else if (char === '\r' || char === '\n') {
                     currentRow.push(currentVal);
-                    if (currentRow.some(cell => cell.trim() !== '')) {
-                        rows.push(currentRow);
-                    }
+                    if (currentRow.some(cell => cell.trim() !== '')) rows.push(currentRow);
                     currentRow = [];
                     currentVal = '';
+                    if (char === '\r' && nextChar === '\n') i++;
                 } else {
                     currentVal += char;
                 }
             }
 
-            if (currentVal !== '' || currentRow.length > 0) {
+            if (inQuotes) throw new Error('Le fichier contient un champ entre guillemets qui n’est pas refermé.');
+
+            if (currentVal !== '' || currentRow.length > 0 || apresGuillemet) {
                 currentRow.push(currentVal);
-                if (currentRow.some(cell => cell.trim() !== '')) {
-                    rows.push(currentRow);
-                }
+                if (currentRow.some(cell => cell.trim() !== '')) rows.push(currentRow);
             }
 
             if (rows.length < 2) return { enTetes: [], lignes: [] };
 
-            const enTetes = rows[0].map(e => e.trim()).filter(e => e !== "");
-            const resultats = [];
+            // On conserve strictement la position des colonnes : une en-tête vide ne doit
+            // jamais décaler les valeurs des colonnes suivantes.
+            const enTetes = [];
+            const occurrences = new Map();
+            rows[0].forEach((cell, index) => {
+                let header = String(cell ?? '').trim();
+                if (!header) header = `Colonne sans nom ${index + 1}`;
+                const base = header;
+                const count = (occurrences.get(base) || 0) + 1;
+                occurrences.set(base, count);
+                if (count > 1) header = `${base} (${count})`;
+                enTetes.push(header);
+            });
 
+            const resultats = [];
             for (let i = 1; i < rows.length; i++) {
                 const valeurs = rows[i];
+                if (valeurs.length > enTetes.length) {
+                    throw new Error(`La ligne ${i + 1} contient plus de colonnes que la ligne d’en-tête. Vérifiez le séparateur et les guillemets.`);
+                }
                 const objetLigne = {};
                 enTetes.forEach((entete, index) => {
-                    objetLigne[entete] = valeurs[index] !== undefined ? valeurs[index].trim() : "";
+                    objetLigne[entete] = valeurs[index] !== undefined ? String(valeurs[index]).trim() : '';
                 });
                 resultats.push(objetLigne);
             }
